@@ -307,6 +307,3 @@ async def on_ready():
     print(f'Bot jest gotowy: {bot.user}')
     await bot.add_cog(AudioRecorder(bot))
 
-
-# Uruchom bota
-bot.run('<token>')
