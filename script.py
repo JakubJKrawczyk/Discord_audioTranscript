@@ -309,4 +309,4 @@ async def on_ready():
 
 
 # Uruchom bota
-bot.run('MTMzOTY2MjU4Nzg5NzU3NzYxNA.GnvZUF.kp6OBXDzwiXt_Kn_YRlaSfWVObmxauGYomf4N8')
+bot.run('<token>')
