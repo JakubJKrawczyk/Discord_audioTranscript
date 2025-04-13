@@ -1,0 +1,13 @@
+class Consts:
+    WCHODZI_NA_KANAL = "No dobra, to teraz żeby się nie zorientowali"
+    ZACZYNA_NAGRYWANIE = "No to teraz zobaczymy co kombinujecie"
+    ZAKONCZENIE_NAGRYWANIA = "Podrobiony mandat i parkowanie na zakazie... I już dzwonimy na straż miejską"
+    RECORD_USER = "Kurde, jestem geniuszem. Teraz zawsze będę o krok przed tymi bandziorami. Nic tak nie poprawia humoru jak mały donosik. Oho, chwila. Znowu coś gadają"
+    RECORD_ALL = "Proszę proszę, co my tu mamy! Nielegalne zgromadzenie w miejscu publicznym. Powyżej dwóch osób, odległość mniej niż 1.80. Czyli mniejsza niż rekomendowana. A do tego spożywanie alkoholu w miejscu publicznym."
+    PROCESOWANIE = "No kurde ładuj się dronie, mamy do skontrolowania cały Grochów!"
+    SUMARIZE = "Proszę, proszę, proszę. Mandat za złe parkowanie. Straż miejska się zorientowała, że mandat był lipny i wystawiła prawdziwy?"
+    SUMARIZE_2 = "O kurcze teraz to będzie. Jakiś znajomy ten adres. Dobra nieważne. Taki numer wywinęli, handel narkotykami. I już dzwonimy do prokuratury! Kurcze jaki był ten numer na policję? Z tej podjarki zapomniałem. A!"
+    FINISH = "Podkablowałem, niepodkablowałem. Było nie stawać na zakazie. Pilnujcie się. Mam was na oku. Ja spadam. Nara"
+    CHANGE_MODEL = "Makao 2.0"
+    STOP = "Panowie, to jakaś pomyłka. Kurcze, kurcze, POLICJA! RATUNKU!"
+    SHOW_CONTEXT = "Powiem, wszystko powiem! Tylko wyjmijcie mi tą kupę zza bluzy."

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -9,6 +10,9 @@ import datetime
 import os
 import pyaudio
 from typing import Optional
+import sys
+sys.path.append('../..')
+from consts import Consts
 
 class RecordingCommands:
     def __init__(self, audio_recorder):
@@ -102,6 +106,7 @@ class RecordingCommands:
             channel = ctx.author.voice.channel
             self.cog.current_channel = channel
             voice_client = await channel.connect()
+            ctx.send(Consts.WCHODZI_NA_KANAL)
 
             # Ustaw tryb nagrywania
             self.cog.recording_users = {str(target_user.id): filename}
@@ -109,6 +114,7 @@ class RecordingCommands:
 
             # Rozpocznij nagrywanie
             self.cog.recording = True
+            ctx.send(Consts.ZACZYNA_NAGRYWANIE)
 
             print(f"wykryto {self.cog.audio.get_device_count()} urządzeń wejściowych")
             # Konfiguracja streamu audio
@@ -126,7 +132,7 @@ class RecordingCommands:
 
             self.cog.stream.start_stream()
             await ctx.send(f"Rozpoczęto nagrywanie użytkownika {target_user.display_name} (plik: {filename})! Użyj !stop aby zakończyć.")
-
+            ctx.send(Consts.RECORD_USER)
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
             self.cog.recording = False
@@ -151,6 +157,7 @@ class RecordingCommands:
             channel = ctx.author.voice.channel
             self.cog.current_channel = channel
             voice_client = await channel.connect()
+            ctx.send(Consts.WCHODZI_NA_KANAL)
 
             # Pobierz wszystkich użytkowników na kanale (oprócz botów)
             users_to_record = {}
@@ -164,6 +171,7 @@ class RecordingCommands:
 
             # Rozpocznij nagrywanie
             self.cog.recording = True
+            ctx.send(Consts.ZACZYNA_NAGRYWANIE)
 
             # Konfiguracja streamu audio
             default_input = self.cog.audio.get_default_input_device_info()
@@ -181,6 +189,7 @@ class RecordingCommands:
             self.cog.stream.start_stream()
             users_str = ", ".join([member.display_name for member in channel.members if not member.bot])
             await ctx.send(f"Rozpoczęto nagrywanie wszystkich użytkowników na kanale {channel.name} (użytkownicy: {users_str})! Użyj !stop aby zakończyć.")
+            ctx.send(Consts.RECORD_ALL)
 
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
@@ -203,6 +212,7 @@ class RecordingCommands:
             if self.cog.stream:
                 self.cog.stream.stop_stream()
                 self.cog.stream.close()
+            ctx.send(Consts.ZAKONCZENIE_NAGRYWANIA)
 
             # Zapisz pliki audio dla każdego nagrywanego użytkownika
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -236,6 +246,8 @@ class RecordingCommands:
 
                 # Wykonaj transkrypcję dla tego pliku
                 await ctx.send(f"Rozpoczynam transkrypcję dla użytkownika {self.cog.get_username_by_id(user_id)}...")
+                ctx.send(Consts.PROCESOWANIE)
+
                 transcription = await self.cog.transcribe_audio(filename)
                 transcriptions[user_id] = transcription
 
@@ -272,13 +284,15 @@ class RecordingCommands:
                     await ctx.send(f"Generuję podsumowanie dla {username}...")
                     summary = await self.cog.summarize_with_ollama(transcription)
                     summaries[user_id] = summary
-
+            ctx.send(Consts.SUMARIZE)
             # Wyślij podsumowania
             if summaries:
                 await ctx.send("**Podsumowania:**")
                 for user_id, summary in summaries.items():
                     username = self.cog.get_username_by_id(user_id)
                     await ctx.send(f"**Podsumowanie dla {username}:**\n{summary}")
+            ctx.send(Consts.SUMARIZE_2)
+            ctx.send(Consts.FINISH)
 
         except Exception as e:
             await ctx.send(f"Wystąpił błąd podczas zatrzymywania nagrywania: {str(e)}")

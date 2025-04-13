@@ -6,6 +6,9 @@ from discord import app_commands
 import requests
 import subprocess
 from typing import Optional
+import sys
+sys.path.append('../..')
+from consts import Consts
 
 class UtilityCommands:
     def __init__(self, audio_recorder):
@@ -29,11 +32,14 @@ class UtilityCommands:
         @self.bot.command()
         async def show_context(ctx):
             """Pokazuje aktualny kontekst użytkownika"""
+            ctx.send(Consts.SHOW_CONTEXT)
+
             await self._show_context(ctx)
 
         @self.bot.command()
         async def change_model(ctx, model_name):
             """Zmienia model Ollama używany do podsumowań"""
+            ctx.send(Consts.CHANGE_MODEL)
             await self._change_model(ctx, model_name)
 
         @self.bot.command()
