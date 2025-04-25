@@ -26,7 +26,7 @@ intents.voice_states = True
 class Bot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix='!',
+            command_prefix='/',
             intents=intents,
             help_command=None
         )
