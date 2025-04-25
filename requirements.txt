@@ -7,3 +7,4 @@ requests==2.31.0
 PyAudio==0.2.14
 keyboard==0.13.5
 librosa==0.10.1
+PyNaCl == 1.15.0
