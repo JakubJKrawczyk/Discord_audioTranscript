@@ -1,42 +1,57 @@
-FROM python:3.9-slim
-LABEL authors="Jakub"
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
-WORKDIR /app
+# Ustawienie zmiennych środowiskowych
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Zainstaluj niezbędne zależności systemowe
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gcc \
-    libasound2-dev \
-    portaudio19-dev \
+# Instalacja podstawowych pakietów i zależności dla PyAudio
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
     python3-dev \
+    python3-numpy \
+    portaudio19-dev \
+    libportaudio2 \
+    libasound2-dev \
+    libsndfile1 \
     ffmpeg \
+    wget \
+    git \
     curl \
+    gcc \
+    build-essential \
+    pkg-config \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Zainstaluj Ollama (tylko dla Linuxa amd64)
+# Instalacja Ollama
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
-# Skopiuj pliki projektu
-COPY script.py .
-COPY requirements.txt .
+# Tworzenie katalogu aplikacji
+WORKDIR /app
 
-# Zainstaluj dodatkowe zależności których brakuje w wymaganiach
-RUN pip install --no-cache-dir numpy==1.24.3 librosa==0.10.1
+# Kopiowanie plików projektu
+COPY . .
 
-# Zainstaluj zależności z pliku requirements
-RUN pip install --no-cache-dir -r requirements.txt
+# Upewnij się, że numpy jest zainstalowany przed PyTorch
+RUN pip3 install --no-cache-dir numpy==1.24.3
 
-# Utwórz katalog na nagrania
-RUN mkdir -p /app/recordings
+# Instalacja PyTorch z obsługą CUDA
+RUN pip3 install --no-cache-dir torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu118
 
-# Dodaj skrypt startowy
-COPY start.sh .
-RUN chmod +x start.sh
+# Instalacja pozostałych zależności Pythona
+RUN pip3 install --no-cache-dir discord.py
+RUN pip3 install --no-cache-dir PyAudio
+RUN pip3 install --no-cache-dir librosa soundfile
+RUN pip3 install --no-cache-dir openai-whisper
+RUN pip3 install --no-cache-dir requests python-dotenv keyboard tqdm
 
-# Ustawienie zmiennej środowiskowej (zastąp swoim tokenem lub przekaż podczas uruchomienia)
-ENV DISCORD_TOKEN="key"
+# Potwierdź instalację numpy
+RUN python3 -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
 
-# Uruchom skrypt startowy
-ENTRYPOINT ["./start.sh"]
+# Tworzenie katalogu na nagrania
+RUN mkdir -p /app/recordings && chmod 777 /app/recordings
+
+# Uruchomienie serwera Ollama w tle i bota
+CMD ["sh", "-c", "ollama serve & sleep 5 && python3 main.py"]
