@@ -22,8 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     build-essential \
     pkg-config \
+    pulseaudio \
+    alsa-utils \
+    libasound2-plugins \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/alsa
+COPY alsa.conf /etc/alsa/alsa.conf
 
 # Instalacja Ollama
 RUN curl -fsSL https://ollama.com/install.sh | sh
