@@ -32,14 +32,14 @@ class UtilityCommands:
         @self.bot.command()
         async def show_context(ctx):
             """Pokazuje aktualny kontekst użytkownika"""
-            ctx.send(Consts.SHOW_CONTEXT)
+            await ctx.send(Consts.SHOW_CONTEXT)
 
             await self._show_context(ctx)
 
         @self.bot.command()
         async def change_model(ctx, model_name):
             """Zmienia model Ollama używany do podsumowań"""
-            ctx.send(Consts.CHANGE_MODEL)
+            await ctx.send(Consts.CHANGE_MODEL)
             await self._change_model(ctx, model_name)
 
         @self.bot.command()
