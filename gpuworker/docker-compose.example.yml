@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  whisper-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: whisper-ollama-api:latest
+    container_name: whisper-ollama-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - whisper-models:/models
+      - ./config:/config
+      - ./uploads:/uploads
+    environment:
+      - WHISPER_MODEL=base
+      - OLLAMA_API_URL=http://ollama:11434
+      - HOST=0.0.0.0
+      - PORT=8000
+    networks:
+      - transcription-network
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - transcription-network
+
+networks:
+  transcription-network:
+    driver: bridge
+
+volumes:
+  whisper-models:
+    driver: local
+  ollama-models:
+    driver: local

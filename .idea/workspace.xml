@@ -4,11 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="85bdc044-de5e-4691-a4f4-52b230da4db7" name="Changes" comment="Dodanie GPU workera">
-      <change afterPath="$PROJECT_DIR$/gpuworker/.env.example" afterDir="false" />
+    <list default="true" id="85bdc044-de5e-4691-a4f4-52b230da4db7" name="Changes" comment="Dodanie proxy do ollamy">
+      <change afterPath="$PROJECT_DIR$/gpuworker/Dockerfile" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/gpuworker/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/gpuworker/config/.env" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/gpuworker/docker-compose.example.yml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/gpuworker/init.sh" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gpuworker/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/gpuworker/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gpuworker/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/gpuworker/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -19,6 +21,7 @@
     <option name="RECENT_TEMPLATES">
       <list>
         <option value="Python Script" />
+        <option value="Dockerfile" />
       </list>
     </option>
   </component>
@@ -44,14 +47,24 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "git-widget-placeholder": "master-gpuworker",
+    "last_opened_file_path": "C:/Users/pc/Desktop/PyCharmProjects/Discord_audioTranscript/gpuworker",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.fileTypes",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\pc\Desktop\PyCharmProjects\Discord_audioTranscript\gpuworker" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\pc\Desktop\PyCharmProjects\Discord_audioTranscript\gpuworker\config" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -68,7 +81,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1746049991024</updated>
-      <workItem from="1746049993446" duration="729000" />
+      <workItem from="1746049993446" duration="1110000" />
     </task>
     <task id="LOCAL-00001" summary="Dodanie GPU workera">
       <option name="closed" value="true" />
@@ -78,7 +91,15 @@
       <option name="project" value="LOCAL" />
       <updated>1746050406770</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Dodanie proxy do ollamy">
+      <option name="closed" value="true" />
+      <created>1746050753344</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1746050753344</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -97,6 +118,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Dodanie GPU workera" />
-    <option name="LAST_COMMIT_MESSAGE" value="Dodanie GPU workera" />
+    <MESSAGE value="Dodanie proxy do ollamy" />
+    <option name="LAST_COMMIT_MESSAGE" value="Dodanie proxy do ollamy" />
   </component>
 </project>

@@ -18,7 +18,9 @@ from enum import Enum
 from dotenv import load_dotenv
 
 # Załaduj zmienne środowiskowe z pliku .env
-load_dotenv()
+config_path = os.environ.get("CONFIG_PATH", ".")
+env_file = os.path.join(config_path, ".env")
+load_dotenv(env_file)
 
 # Konfiguracja loggera
 logging.basicConfig(
