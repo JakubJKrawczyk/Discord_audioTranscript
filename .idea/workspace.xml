@@ -4,32 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="85bdc044-de5e-4691-a4f4-52b230da4db7" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/Discord_audioTranscript.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/gpuworker/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/discord.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Dockerfile" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/alsa.conf" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/audio_recorder.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/commands/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/commands/recording_commands.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/commands/utility_commands.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/commands_loader.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cogs/error_handlers.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/consts.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/start.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/audio_processing.py" beforeDir="false" />
+    <list default="true" id="85bdc044-de5e-4691-a4f4-52b230da4db7" name="Changes" comment="Dodanie GPU workera">
+      <change afterPath="$PROJECT_DIR$/gpuworker/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gpuworker/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/gpuworker/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gpuworker/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/gpuworker/requirements.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -44,6 +23,11 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="ProjectColorInfo"><![CDATA[{
@@ -59,7 +43,7 @@
   "keyToString": {
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "master",
+    "git-widget-placeholder": "master-gpuworker",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -84,11 +68,35 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1746049991024</updated>
-      <workItem from="1746049993446" duration="349000" />
+      <workItem from="1746049993446" duration="729000" />
     </task>
+    <task id="LOCAL-00001" summary="Dodanie GPU workera">
+      <option name="closed" value="true" />
+      <created>1746050406770</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1746050406770</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Dodanie GPU workera" />
+    <option name="LAST_COMMIT_MESSAGE" value="Dodanie GPU workera" />
   </component>
 </project>
