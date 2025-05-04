@@ -49,5 +49,6 @@ EXPOSE 8000
 # Ustaw punkty montowania wolumenów
 VOLUME ["/models", "/config", "/uploads"]
 
+RUN ["ls"]
 # Uruchom aplikację
 CMD ["python", "whisper_transcription_api.py"]

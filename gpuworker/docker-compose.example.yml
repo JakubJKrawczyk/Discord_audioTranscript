@@ -15,7 +15,7 @@ services:
       - ./config:/config
       - ./uploads:/uploads
     environment:
-      - WHISPER_MODEL=base
+      - WHISPER_MODEL=large
       - OLLAMA_API_URL=http://ollama:11434
       - HOST=0.0.0.0
       - PORT=8000
