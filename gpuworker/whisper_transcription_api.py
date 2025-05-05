@@ -16,6 +16,7 @@ import io
 from pydub import AudioSegment
 from enum import Enum
 from dotenv import load_dotenv
+from whisper import Whisper
 
 # Załaduj zmienne środowiskowe z pliku .env
 config_path = os.environ.get("CONFIG_PATH", ".")
@@ -45,7 +46,7 @@ app.add_middleware(
 )
 
 # Globalne zmienne przechowujące modele
-whisper_model = None
+whisper_model : Optional[Whisper] = None
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -153,11 +154,30 @@ async def transcribe_audio(
         if model_type == ModelType.WHISPER:
             # Użyj modelu Whisper
             result = whisper_model.transcribe(temp_path)
+
+            # FIX: Obsługa różnych wersji Whisper - dostosowanie model.name
+            model_name = ""
+            try:
+                if hasattr(whisper_model, 'model') and hasattr(whisper_model.model, 'name'):
+                    model_name = f"whisper-{whisper_model.model.name}"
+                else:
+                    # Alternatywne podejścia dla różnych wersji Whisper
+                    if hasattr(whisper_model, 'name'):
+                        model_name = f"whisper-{whisper_model.name}"
+                    elif hasattr(whisper_model, 'model_size'):
+                        model_name = f"whisper-{whisper_model.model_size}"
+                    else:
+                        # Fallback jeśli nie można określić nazwy modelu
+                        model_name = f"whisper-{WHISPER_MODEL_SIZE}"
+            except Exception as e:
+                logger.warning(f"Nie można określić nazwy modelu Whisper: {str(e)}")
+                model_name = f"whisper-unknown"
+
             transcription_result = TranscriptionResponse(
                 text=result["text"],
                 language=result.get("language"),
                 duration=result.get("duration"),
-                model_used=f"whisper-{whisper_model.model.name}"
+                model_used=model_name
             )
         else:  # ModelType.OLLAMA
             # Użyj modelu Ollama

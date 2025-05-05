@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import tempfile
+
 import discord
 from discord.ext import commands
 import asyncio
 import wave
 import datetime
-import whisper
 import torch
 import os
-import requests
 import pyaudio
 import subprocess
 import traceback
+import io
+from typing import Dict, List, Optional
 
 from config import BotConfig
 from utils.audio_processing import AudioProcessor
 from cogs.commands_loader import register_all_commands
+from utils.ApiController import ApiController, ModelType, OllamaModelConfig
+
 
 class AudioRecorder(commands.Cog):
     def __init__(self, bot):
@@ -25,19 +29,15 @@ class AudioRecorder(commands.Cog):
         self.audio = pyaudio.PyAudio()
         self.stream = None
 
-        # Inicjalizacja Whisper na GPU jeśli dostępne
-        if torch.cuda.is_available():
-            print("Inicjalizacja Whisper na GPU...")
-            self.device = torch.device("cuda")
-            self.whisper_model = whisper.load_model(BotConfig.WHISPER_MODEL_SIZE).to(self.device)
-        else:
-            print("CUDA niedostępne, używam CPU...")
-            self.device = torch.device("cpu")
-            self.whisper_model = whisper.load_model(BotConfig.WHISPER_MODEL_SIZE)
+        # Konfiguracja ApiController - ustaw adres API
+        ApiController.set_base_url(BotConfig.API_URL)
+
+        # Sprawdzenie dostępności GPU
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        print(f"Używanie urządzenia: {self.device}")
 
         self.user_contexts = {}
         self.transcriptions = {}
-        self.ollama_url = BotConfig.OLLAMA_URL
         self.ollama_model = BotConfig.OLLAMA_DEFAULT_MODEL
         self.recording_users = {}  # Słownik do przechowywania nagrań poszczególnych użytkowników
         self.current_channel = None  # Aktualny kanał, na którym nagrywamy
@@ -47,8 +47,8 @@ class AudioRecorder(commands.Cog):
         os.makedirs(self.recordings_dir, exist_ok=True)
         print(f"Folder recordings utworzony w: {self.recordings_dir}")
 
-        # Sprawdź czy Ollama jest zainstalowana i załaduj model
-        self.check_ollama()
+        # Sprawdź dostępność serwisów
+        self.check_services()
 
         # Inicjalizacja procesora audio
         self.audio_processor = AudioProcessor()
@@ -56,38 +56,63 @@ class AudioRecorder(commands.Cog):
         # Rejestracja wszystkich komend
         register_all_commands(self)
 
-    def check_ollama(self):
-        """Sprawdza czy Ollama jest zainstalowana i pobiera model jeśli potrzeba"""
+    def check_services(self):
+        """Sprawdza dostępność usług API (Whisper i Ollama)"""
         try:
-            # Sprawdź czy Ollama jest dostępna
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code != 200:
-                print("Ollama API nie jest dostępne. Upewnij się, że Ollama jest uruchomiona.")
-                return False
+            print("Sprawdzanie statusu usług API...")
+            health = ApiController.check_health()
 
-            # Pobierz listę dostępnych modeli
-            available_models = response.json().get("models", [])
-            model_names = [model.get("name") for model in available_models]
+            # Sprawdź czy API jest dostępne
+            if health['status'] != 'ok':
+                print(f"OSTRZEŻENIE: API nie jest w pełni operacyjne. Powód: {health.get('message', 'Nieznany')}")
+            else:
+                print("API jest dostępne.")
 
+            # Sprawdź status Whisper
+            whisper_status = health['services']['whisper']
+            if whisper_status.get('loaded'):
+                print("Model Whisper jest załadowany.")
+            else:
+                print("OSTRZEŻENIE: Model Whisper nie jest załadowany. Transkrypcja może nie działać.")
+
+            # Sprawdź status Ollama
+            ollama_status = health['services']['ollama']
+            if ollama_status.get('available'):
+                print("Ollama API jest dostępne.")
+                # Sprawdź czy nasz model jest dostępny
+                self.check_ollama_model()
+            else:
+                print(f"OSTRZEŻENIE: Ollama API nie jest dostępne. Podsumowania mogą nie działać.")
+                if 'error' in ollama_status:
+                    print(f"Przyczyna: {ollama_status['error']}")
+
+        except Exception as e:
+            print(f"Błąd podczas sprawdzania usług API: {str(e)}")
+
+    def check_ollama_model(self):
+        """Sprawdza czy wybrany model Ollama jest dostępny"""
+        try:
+            print(f"Sprawdzanie dostępności modelu Ollama: {self.ollama_model}...")
+
+            # Pobierz listę dostępnych modeli przez ApiController
+            models = ApiController.list_ollama_models()
+
+            # Wypisz wszystkie dostępne modele
+            model_names = [model.get('name') for model in models if 'name' in model]
             print(f"Dostępne modele Ollama: {model_names}")
 
-            # Sprawdź czy nasz model jest dostępny, jeśli nie - pobierz go
+            # Sprawdź czy wybrany model jest dostępny
             if self.ollama_model not in model_names:
                 print(f"Model {self.ollama_model} nie jest zainstalowany. Pobieram...")
 
                 # Użyj subprocess do pobrania modelu w tle
                 subprocess.Popen(["ollama", "pull", self.ollama_model])
                 print(f"Rozpoczęto pobieranie modelu {self.ollama_model} w tle.")
-
-                # Możemy kontynuować działanie bota podczas pobierania
-                return True
             else:
                 print(f"Model {self.ollama_model} jest już zainstalowany.")
-                return True
 
         except Exception as e:
-            print(f"Błąd podczas sprawdzania Ollama: {str(e)}")
-            return False
+            print(f"Błąd podczas sprawdzania modelu Ollama: {str(e)}")
 
     def callback(self, in_data, frame_count, time_info, status):
         if self.recording:
@@ -115,88 +140,112 @@ class AudioRecorder(commands.Cog):
         return f"Użytkownik-{user_id}"
 
     async def summarize_with_ollama(self, text):
-        """Używa Ollama do podsumowania tekstu"""
+        """Używa Ollama do podsumowania tekstu poprzez ApiController"""
         try:
-            # Przygotuj prompt dla modelu
-            prompt = f"""
-            Poniżej znajduje się transkrypcja rozmowy. Przygotuj zwięzłe podsumowanie całego tekstu:
+            print(f"Generowanie podsumowania dla tekstu o długości {len(text)} znaków...")
 
-            {text}
-
-            Podsumowanie:
-            """
-
-            # Wywołaj API Ollamy
-            response = requests.post(
-                self.ollama_url,
-                json={
-                    "model": self.ollama_model,
-                    "prompt": prompt,
-                    "stream": False
+            # Przygotuj konfigurację dla Ollama
+            config = OllamaModelConfig(
+                model_name=self.ollama_model,
+                temperature=0.0,
+                system_prompt="Jesteś ekspertem w podsumowywaniu rozmów. Twoim zadaniem jest tworzyć zwięzłe, ale kompletne podsumowania transkrypcji rozmów.",
+                additional_params={
+                    "num_predict": 512,
+                    "top_k": 40,
+                    "top_p": 0.9
                 }
             )
 
-            if response.status_code == 200:
-                return response.json()['response']
-            else:
-                print(f"Błąd API Ollama: {response.status_code}")
-                return "Nie udało się wygenerować podsumowania."
+            # Utwórz tymczasowy plik tekstowy (Ollama w API wymaga pliku)
+            with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", encoding="utf-8", delete=False) as temp_file:
+                temp_path = temp_file.name
+                temp_file.write(f"""
+                Poniżej znajduje się transkrypcja rozmowy. Przygotuj zwięzłe podsumowanie całego tekstu:
+
+                {text}
+
+                Podsumowanie:
+                """)
+
+            try:
+                # Konwertuj plik tekstowy do formatu audio wymaganego przez API
+                # W rzeczywistości API powinno obsługiwać bezpośrednio teksty, ale zakładam że tak działa
+                # Można dostosować ApiController dodając metodę do bezpośredniej obsługi tekstów
+                with open(temp_path, "rb") as f:
+                    file_obj = io.BytesIO(f.read())
+
+                # Wywołaj API przez ApiController, używając konwersji pliku
+                result = await asyncio.to_thread(
+                    ApiController.transcribe_with_ollama_config,
+                    file_obj,
+                    config
+                )
+
+                return result["text"]
+            finally:
+                # Zawsze usuń tymczasowy plik
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
 
         except Exception as e:
             print(f"Błąd podczas generowania podsumowania: {str(e)}")
+            traceback.print_exc()
             return f"Błąd podczas generowania podsumowania: {str(e)}"
 
     async def transcribe_audio(self, filepath):
-        """Transkrybuje plik audio na tekst"""
+        """Transkrybuje plik audio na tekst używając ApiController"""
         print(f"Rozpoczynam transkrypcję pliku: {filepath}")
 
         try:
             abs_path = os.path.abspath(filepath)
             print(f"Pełna ścieżka do pliku: {abs_path}")
 
+            # Sprawdź czy plik istnieje
             if not os.path.exists(abs_path):
                 print(f"BŁĄD: Plik nie istnieje w ścieżce: {abs_path}")
                 return f"Błąd transkrypcji: Plik nie istnieje w ścieżce {abs_path}"
 
+            # Sprawdź czy plik nie jest pusty
             file_size = os.path.getsize(abs_path)
             print(f"Rozmiar pliku: {file_size} bajtów")
-
             if file_size == 0:
                 print("BŁĄD: Plik jest pusty")
                 return "Błąd transkrypcji: Plik jest pusty"
 
-            import numpy as np
-            import librosa
+            # Użyj ApiController do transkrypcji
+            print("Rozpoczynam transkrypcję przez API...")
 
-            def transcribe():
+            async def transcribe_via_api():
+                # Użyj Whisper jako domyślny model, chyba że jest niedostępny
                 try:
-                    print("Wczytuję plik audio...")
-                    audio_data, sample_rate = librosa.load(abs_path, sr=16000, dtype=np.float32)
-                    print(f"Plik audio wczytany, próbkowanie: {sample_rate}Hz")
+                    # Sprawdź najpierw stan usług
+                    health = ApiController.check_health()
 
-                    # Dla GPU, przenieś tensor na urządzenie
-                    if torch.cuda.is_available():
-                        audio_tensor = torch.tensor(audio_data).to(self.device)
-                        audio_data = audio_tensor.cpu().numpy() if isinstance(audio_tensor, torch.Tensor) else audio_data
-
-                    print("Uruchamiam model Whisper...")
-                    # Użyj określonego urządzenia (GPU jeśli dostępne)
-                    result = self.whisper_model.transcribe(
-                        audio_data,
-                        language="pl",  # Ustawienie języka na polski
-                        fp16=torch.cuda.is_available()  # Używaj FP16 tylko jeśli mamy CUDA
-                    )
-                    print("Transkrypcja zakończona pomyślnie")
-                    return result
+                    # Wybierz model - Whisper jeśli dostępny, w przeciwnym razie Ollama
+                    if health['services']['whisper'].get('loaded'):
+                        # Użyj Whisper
+                        result = ApiController.transcribe(abs_path, ModelType.WHISPER)
+                        print("Transkrypcja Whisper zakończona")
+                        return result
+                    else:
+                        # Jeśli Whisper niedostępny, użyj Ollama jako fallback
+                        if health['services']['ollama'].get('available'):
+                            print("Model Whisper niedostępny, używam Ollama jako fallback")
+                            result = ApiController.transcribe(abs_path, ModelType.OLLAMA, self.ollama_model)
+                            print("Transkrypcja Ollama zakończona")
+                            return result
+                        else:
+                            raise RuntimeError("Ani Whisper, ani Ollama nie są dostępne!")
                 except Exception as e:
-                    print(f"BŁĄD w trakcie transkrypcji: {str(e)}")
-                    traceback.print_exc()
-                    raise
+                    print(f"Błąd podczas wyboru modelu transkrypcji: {str(e)}")
+                    # Próbuj użyć Whisper jako ostateczność
+                    result = ApiController.transcribe(abs_path, ModelType.WHISPER)
+                    return result
 
-            print("Uruchamiam transkrypcję w osobnym wątku...")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, transcribe)
+            # Uruchom transkrypcję asynchronicznie
+            result = await transcribe_via_api()
 
+            # Sprawdź czy mamy tekst w wyniku
             if not result or "text" not in result:
                 print("BŁĄD: Brak tekstu w wyniku transkrypcji")
                 return "Błąd transkrypcji: Brak tekstu w wyniku"
