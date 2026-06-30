@@ -1,5 +1,7 @@
 discord.py>=2.3.2
-discord-ext-voice-recv>=0.4.1
+# discord-ext-voice-recv publikuje tylko wersje pre-release (alfa), dlatego
+# specyfikator zawiera ...a0 - to włącza wybór alf przez pip (bez --pre).
+discord-ext-voice-recv>=0.5.0a0
 PyNaCl>=1.5.0
 requests>=2.31.0
 python-dotenv>=1.0.0
