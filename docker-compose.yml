@@ -6,6 +6,11 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     restart: unless-stopped
+    environment:
+      # Tylko compute+utility - bez bibliotek graficznych (EGL),
+      # żeby uniknąć montowania libEGL_nvidia.so itp.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
       - ollama-models:/root/.ollama
     networks:
@@ -56,6 +61,9 @@ services:
       - OLLAMA_API_URL=http://ollama:11434
       - HOST=0.0.0.0
       - PORT=8000
+      # Tylko compute+utility - bez bibliotek graficznych (EGL).
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
       - whisper-models:/models
     networks:

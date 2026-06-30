@@ -163,9 +163,17 @@ class AudioRecorder(commands.Cog):
             )
             return result["text"]
         except Exception as e:
-            print(f"Błąd podczas generowania podsumowania: {str(e)}")
+            msg = str(e)
+            print(f"Błąd podczas generowania podsumowania: {msg}")
             traceback.print_exc()
-            return f"Błąd podczas generowania podsumowania: {str(e)}"
+            # Czytelny komunikat, gdy model nie jest dostępny w Ollamie.
+            if "not found" in msg.lower() or "404" in msg:
+                return (
+                    f"⚠️ Model `{self.ollama_model}` nie jest dostępny w Ollamie.\n"
+                    f"Pobierz go na serwerze: `docker exec ollama ollama pull {self.ollama_model}`, "
+                    f"sprawdź dostępne modele przez `/list_models`, albo zmień model `/change_model <model>`."
+                )
+            return f"Błąd podczas generowania podsumowania: {msg}"
 
     async def summarize_session(self, session, requester_id=None, label="all"):
         """

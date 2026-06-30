@@ -10,6 +10,46 @@ sys.path.append('../..')
 from consts import Consts
 from utils.ApiController import ApiController
 
+# Struktura pomocy: (kategoria, [(składnia, opis), ...])
+HELP_SECTIONS = [
+    ("🎙️ Nagrywanie", [
+        ("/record_user [użytkownik] [nazwa]", "Nagrywa jednego użytkownika (domyślnie Ciebie)."),
+        ("/record_all [prefix]", "Nagrywa wszystkich na Twoim kanale głosowym."),
+        ("/stop", "Kończy nagrywanie → transkrypcja + podsumowanie (nadaje ID)."),
+    ]),
+    ("📜 Transkrypcje", [
+        ("/transcriptions [strona]", "Lista transkrypcji od najnowszej (paginacja ◀ ▶)."),
+        ("/summarize <cel>", "Podsumowanie. cel: ID • all • indeks `2` • przedział `1-3`."),
+        ("/delete <cel>", "Usuwa transkrypcję. cel: ID • indeks `2` • przedział `1-3`."),
+    ]),
+    ("🤖 Ollama", [
+        ("/change_model <model>", "Zmienia model używany do podsumowań."),
+        ("/list_models", "Pokazuje modele dostępne w Ollamie."),
+    ]),
+    ("🛠️ Pozostałe", [
+        ("/context <tekst>", "Ustawia Twój kontekst (poprawia jakość podsumowań)."),
+        ("/show_context", "Pokazuje Twój aktualny kontekst."),
+        ("/help [komenda]", "Ta pomoc, albo szczegóły wybranej komendy."),
+    ]),
+]
+
+
+def build_help_embed(prefix="/"):
+    """Buduje embed z pełną listą komend (składnia + opis)."""
+    embed = discord.Embed(
+        title="📖 Dostępne komendy",
+        description=(
+            f"Każda komenda działa jako slash (`/`) oraz z prefixem (`{prefix}`).\n"
+            "Zalecane są slash komendy `/`."
+        ),
+        color=discord.Color.blue(),
+    )
+    for category, items in HELP_SECTIONS:
+        value = "\n".join(f"**`{syntax}`**\n{desc}" for syntax, desc in items)
+        embed.add_field(name=category, value=value, inline=False)
+    return embed
+
+
 class UtilityCommands:
     def __init__(self, audio_recorder):
         self.cog = audio_recorder
@@ -207,57 +247,7 @@ class UtilityCommands:
                     f"❌ Nie znaleziono komendy `{command_name}`. Użyj `!help` lub `/help` aby zobaczyć dostępne komendy.")
         else:
             # Pokaż wszystkie komendy
-            embed = discord.Embed(
-                title="Lista dostępnych komend",
-                description=f"Możesz użyć zarówno prefixu `{self.bot.command_prefix}` jak i slash komend `/`\nZalecane jest używanie slash komend `/`.",
-                color=discord.Color.blue()
-            )
-
-            # Podziel komendy na kategorie
-            recording_commands = []
-            transcript_commands = []
-            ollama_commands = []
-            utility_commands = []
-
-            for command in sorted(self.bot.commands, key=lambda x: x.name):
-                if command.name in ['record_user', 'record_all', 'stop']:
-                    recording_commands.append(f"`{command.name}`")
-                elif command.name in ['transcriptions', 'summarize', 'delete']:
-                    transcript_commands.append(f"`{command.name}`")
-                elif command.name in ['change_model', 'list_models']:
-                    ollama_commands.append(f"`{command.name}`")
-                else:
-                    utility_commands.append(f"`{command.name}`")
-
-            if recording_commands:
-                embed.add_field(
-                    name="🎙️ Nagrywanie",
-                    value=", ".join(recording_commands),
-                    inline=False
-                )
-
-            if transcript_commands:
-                embed.add_field(
-                    name="📜 Transkrypcje",
-                    value=", ".join(transcript_commands),
-                    inline=False
-                )
-
-            if ollama_commands:
-                embed.add_field(
-                    name="🤖 Ollama i przetwarzanie",
-                    value=", ".join(ollama_commands),
-                    inline=False
-                )
-
-            if utility_commands:
-                embed.add_field(
-                    name="🛠️ Pozostałe",
-                    value=", ".join(utility_commands),
-                    inline=False
-                )
-
-            await ctx.send(embed=embed)
+            await ctx.send(embed=build_help_embed(self.bot.command_prefix))
 
     async def _help_slash(self, interaction, command=None):
         """Implementacja slash komendy pomocy"""
@@ -287,21 +277,6 @@ class UtilityCommands:
                 )
         else:
             # Pokaż wszystkie komendy
-            embed = discord.Embed(
-                title="Lista dostępnych komend",
-                description="Wszystkie komendy są dostępne jako slash komendy zaczynające się od `/`",
-                color=discord.Color.blue()
+            await interaction.response.send_message(
+                embed=build_help_embed(self.bot.command_prefix), ephemeral=True
             )
-
-            # Podziel komendy na kategorie
-            recording_commands = [f"`/{c}`" for c in ['record_user', 'record_all', 'stop']]
-            transcript_commands = [f"`/{c}`" for c in ['transcriptions', 'summarize', 'delete']]
-            ollama_commands = [f"`/{c}`" for c in ['change_model', 'list_models']]
-            utility_commands = [f"`/{c}`" for c in ['help', 'context', 'show_context']]
-
-            embed.add_field(name="🎙️ Nagrywanie", value=", ".join(recording_commands), inline=False)
-            embed.add_field(name="📜 Transkrypcje", value=", ".join(transcript_commands), inline=False)
-            embed.add_field(name="🤖 Ollama i przetwarzanie", value=", ".join(ollama_commands), inline=False)
-            embed.add_field(name="🛠️ Pozostałe", value=", ".join(utility_commands), inline=False)
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
