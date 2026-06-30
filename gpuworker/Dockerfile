@@ -1,54 +1,50 @@
-FROM python:3.10-slim
+# Obraz pod GPU NVIDIA (Whisper liczy na karcie).
+# Wymaga na hoście: sterownik NVIDIA + nvidia-container-toolkit.
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
-# Ustaw zmienne środowiskowe
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    # Ustaw folder cache dla PyTorch i Whisper
+    # Cache modeli na trwałym wolumenie /models:
+    #  - Whisper używa XDG_CACHE_HOME (-> /models/cache/whisper)
+    #  - PyTorch używa TORCH_HOME
     TORCH_HOME=/models/torch \
-    WHISPER_MODELS_DIR=/models/whisper
+    XDG_CACHE_HOME=/models/cache \
+    PYTHONPATH=/app \
+    CONFIG_PATH=/config
 
-# Zainstaluj niezbędne pakiety systemowe
+# Python + ffmpeg (Whisper dekoduje audio przez ffmpeg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
     ffmpeg \
-    build-essential \
     libsndfile1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Utwórz użytkownika bez uprawnień roota
-RUN useradd -m -u 1000 appuser
+# Użytkownik bez roota + katalogi (z prawidłowym właścicielem dla wolumenów)
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app /config /models/torch /models/cache \
+    && chown -R appuser:appuser /app /config /models
 
-# Utwórz katalogi aplikacji i ustaw uprawnienia
-RUN mkdir -p /app /config /models/torch /models/whisper /uploads \
-    && chown -R appuser:appuser /app /config /models /uploads
-
-# Ustaw katalog roboczy
 WORKDIR /app
 
-# Skopiuj pliki requirements
+# Torch w wersji CUDA (cu121) - instalowany osobno z indeksu PyTorch.
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121
+
+# Pozostałe zależności (torch jest już zainstalowany powyżej)
 COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Zainstaluj zależności Pythona
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
-# Skopiuj kod aplikacji
+# Kod aplikacji
 COPY *.py .
 
-# Przełącz na użytkownika bez uprawnień roota
 USER appuser
 
-# Ustaw zmienną środowiskową do wczytywania plików konfiguracyjnych
-ENV PYTHONPATH=/app \
-    CONFIG_PATH=/config
-
-# Eksponuj port aplikacji
 EXPOSE 8000
 
-# Ustaw punkty montowania wolumenów
-VOLUME ["/models", "/config", "/uploads"]
+# /models i /config dostarcza docker-compose (wolumeny)
+VOLUME ["/models", "/config"]
 
-RUN ["ls"]
-# Uruchom aplikację
-CMD ["python", "whisper_transcription_api.py"]
+CMD ["python3", "whisper_transcription_api.py"]

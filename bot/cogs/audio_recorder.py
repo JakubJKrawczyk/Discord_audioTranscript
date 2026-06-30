@@ -1,269 +1,185 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import tempfile
-
-import discord
-from discord.ext import commands
-import asyncio
-import wave
-import datetime
-import torch
 import os
-import pyaudio
-import subprocess
+import asyncio
 import traceback
-import io
-from typing import Dict, List, Optional
+
+from discord.ext import commands, tasks
 
 from config import BotConfig
-from utils.audio_processing import AudioProcessor
 from cogs.commands_loader import register_all_commands
-from utils.ApiController import ApiController, ModelType, OllamaModelConfig
+from utils.ApiController import ApiController, ModelType
+from utils.audio_sink import PerUserPCMSink  # noqa: F401  (re-export dla zgodności)
+from utils.storage import TranscriptionStore
 
 
 class AudioRecorder(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.recording = False
-        self.frames = {}  # Słownik dla przechowywania ramek audio różnych użytkowników
-        self.audio = pyaudio.PyAudio()
-        self.stream = None
+        self.current_channel = None  # Kanał, na którym nagrywamy
+        self.voice_client = None     # Aktywny VoiceRecvClient
+        self.sink = None             # Aktywny PerUserPCMSink
+        self.recording_users = {}    # {user_id: nazwa_pliku}
 
-        # Konfiguracja ApiController - ustaw adres API
+        # Skonfiguruj adres serwera transkrypcji
         ApiController.set_base_url(BotConfig.API_URL)
 
-        # Sprawdzenie dostępności GPU
-        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        print(f"Używanie urządzenia: {self.device}")
-
         self.user_contexts = {}
-        self.transcriptions = {}
         self.ollama_model = BotConfig.OLLAMA_DEFAULT_MODEL
-        self.recording_users = {}  # Słownik do przechowywania nagrań poszczególnych użytkowników
-        self.current_channel = None  # Aktualny kanał, na którym nagrywamy
 
-        # Utworzenie folderu recordings
+        # Foldery na nagrania i dane
         self.recordings_dir = BotConfig.RECORDINGS_DIR
         os.makedirs(self.recordings_dir, exist_ok=True)
-        print(f"Folder recordings utworzony w: {self.recordings_dir}")
+        print(f"Folder recordings: {self.recordings_dir}")
 
-        # Sprawdź dostępność serwisów
+        # Trwały magazyn transkrypcji/podsumowań
+        self.store = TranscriptionStore(
+            base_dir=BotConfig.DATA_DIR,
+            recordings_dir=self.recordings_dir,
+            audio_retention_days=BotConfig.AUDIO_RETENTION_DAYS,
+        )
+        print(f"Magazyn danych: {BotConfig.DATA_DIR} (audio: {BotConfig.AUDIO_RETENTION_DAYS} dni)")
+
+        # Sprawdź dostępność usług API
         self.check_services()
-
-        # Inicjalizacja procesora audio
-        self.audio_processor = AudioProcessor()
 
         # Rejestracja wszystkich komend
         register_all_commands(self)
 
+    async def cog_load(self):
+        """Wywoływane przy ładowaniu cog-a - jednorazowe czyszczenie + pętla."""
+        try:
+            removed = await asyncio.to_thread(self.store.prune_audio)
+            if removed:
+                print(f"Usunięto {len(removed)} starych plików audio.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Błąd podczas czyszczenia audio: {e}")
+        if not self.audio_cleanup_loop.is_running():
+            self.audio_cleanup_loop.start()
+
+    def cog_unload(self):
+        self.audio_cleanup_loop.cancel()
+
+    @tasks.loop(hours=24)
+    async def audio_cleanup_loop(self):
+        """Codzienne czyszczenie plików audio starszych niż retencja."""
+        try:
+            removed = await asyncio.to_thread(self.store.prune_audio)
+            if removed:
+                print(f"[cleanup] Usunięto {len(removed)} starych plików audio.")
+        except Exception as e:  # noqa: BLE001
+            print(f"[cleanup] Błąd: {e}")
+
     def check_services(self):
-        """Sprawdza dostępność usług API (Whisper i Ollama)"""
+        """Sprawdza dostępność usług API (Whisper i Ollama)."""
         try:
             print("Sprawdzanie statusu usług API...")
             health = ApiController.check_health()
 
-            # Sprawdź czy API jest dostępne
-            if health['status'] != 'ok':
-                print(f"OSTRZEŻENIE: API nie jest w pełni operacyjne. Powód: {health.get('message', 'Nieznany')}")
+            if health.get('status') != 'ok':
+                print(f"OSTRZEŻENIE: API nie jest w pełni operacyjne: {health.get('message')}")
             else:
                 print("API jest dostępne.")
 
-            # Sprawdź status Whisper
-            whisper_status = health['services']['whisper']
-            if whisper_status.get('loaded'):
+            services = health.get('services', {})
+            if services.get('whisper', {}).get('loaded'):
                 print("Model Whisper jest załadowany.")
             else:
                 print("OSTRZEŻENIE: Model Whisper nie jest załadowany. Transkrypcja może nie działać.")
 
-            # Sprawdź status Ollama
-            ollama_status = health['services']['ollama']
-            if ollama_status.get('available'):
+            if services.get('ollama', {}).get('available'):
                 print("Ollama API jest dostępne.")
-                # Sprawdź czy nasz model jest dostępny
                 self.check_ollama_model()
             else:
-                print(f"OSTRZEŻENIE: Ollama API nie jest dostępne. Podsumowania mogą nie działać.")
-                if 'error' in ollama_status:
-                    print(f"Przyczyna: {ollama_status['error']}")
-
+                print("OSTRZEŻENIE: Ollama API nie jest dostępne. Podsumowania mogą nie działać.")
         except Exception as e:
             print(f"Błąd podczas sprawdzania usług API: {str(e)}")
 
     def check_ollama_model(self):
-        """Sprawdza czy wybrany model Ollama jest dostępny"""
+        """Sprawdza, czy wybrany model Ollama jest dostępny na serwerze."""
         try:
-            print(f"Sprawdzanie dostępności modelu Ollama: {self.ollama_model}...")
-
-            # Pobierz listę dostępnych modeli przez ApiController
             models = ApiController.list_ollama_models()
-
-            # Wypisz wszystkie dostępne modele
-            model_names = [model.get('name') for model in models if 'name' in model]
+            model_names = [m.get('name') for m in models if 'name' in m]
             print(f"Dostępne modele Ollama: {model_names}")
 
-            # Sprawdź czy wybrany model jest dostępny
             if self.ollama_model not in model_names:
-                print(f"Model {self.ollama_model} nie jest zainstalowany. Pobieram...")
-
-                # Użyj subprocess do pobrania modelu w tle
-                subprocess.Popen(["ollama", "pull", self.ollama_model])
-                print(f"Rozpoczęto pobieranie modelu {self.ollama_model} w tle.")
+                print(
+                    f"OSTRZEŻENIE: Model {self.ollama_model} nie jest dostępny na serwerze Ollama. "
+                    f"Pobierz go na serwerze: `ollama pull {self.ollama_model}`."
+                )
             else:
-                print(f"Model {self.ollama_model} jest już zainstalowany.")
-
+                print(f"Model {self.ollama_model} jest dostępny.")
         except Exception as e:
             print(f"Błąd podczas sprawdzania modelu Ollama: {str(e)}")
 
-    def callback(self, in_data, frame_count, time_info, status):
-        if self.recording:
-            # Identyfikacja wszystkich użytkowników na kanale
-            if self.current_channel:
-                for member in self.current_channel.members:
-                    if member.bot:
-                        continue  # Pomijamy boty
-
-                    # Tworzenie ramek dla każdego użytkownika, jeśli jeszcze nie istnieją
-                    user_id_str = str(member.id)
-                    if user_id_str not in self.frames:
-                        self.frames[user_id_str] = []
-
-                    # Dodawanie danych audio do ramek danego użytkownika
-                    self.frames[user_id_str].append(in_data)
-        return (in_data, pyaudio.paContinue)
-
     def get_username_by_id(self, user_id):
-        """Pobiera nazwę użytkownika na podstawie ID"""
+        """Pobiera nazwę użytkownika na podstawie ID (jeśli jest na kanale)."""
         user_id_str = str(user_id)
-        for member in self.current_channel.members:
-            if str(member.id) == user_id_str:
-                return member.display_name
+        if self.current_channel:
+            for member in self.current_channel.members:
+                if str(member.id) == user_id_str:
+                    return member.display_name
         return f"Użytkownik-{user_id}"
 
-    async def summarize_with_ollama(self, text):
-        """Używa Ollama do podsumowania tekstu poprzez ApiController"""
+    async def transcribe_audio(self, filepath):
+        """Transkrybuje plik audio na tekst używając ApiController (Whisper)."""
+        print(f"Rozpoczynam transkrypcję pliku: {filepath}")
         try:
-            print(f"Generowanie podsumowania dla tekstu o długości {len(text)} znaków...")
+            abs_path = os.path.abspath(filepath)
 
-            # Przygotuj konfigurację dla Ollama
-            config = OllamaModelConfig(
-                model_name=self.ollama_model,
-                temperature=0.0,
-                system_prompt="Jesteś ekspertem w podsumowywaniu rozmów. Twoim zadaniem jest tworzyć zwięzłe, ale kompletne podsumowania transkrypcji rozmów.",
-                additional_params={
-                    "num_predict": 512,
-                    "top_k": 40,
-                    "top_p": 0.9
-                }
+            if not os.path.exists(abs_path):
+                return f"Błąd transkrypcji: Plik nie istnieje ({abs_path})"
+            if os.path.getsize(abs_path) == 0:
+                return "Błąd transkrypcji: Plik jest pusty"
+
+            result = await asyncio.to_thread(
+                ApiController.transcribe, abs_path, ModelType.WHISPER
             )
 
-            # Utwórz tymczasowy plik tekstowy (Ollama w API wymaga pliku)
-            with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", encoding="utf-8", delete=False) as temp_file:
-                temp_path = temp_file.name
-                temp_file.write(f"""
-                Poniżej znajduje się transkrypcja rozmowy. Przygotuj zwięzłe podsumowanie całego tekstu:
+            if not result or "text" not in result:
+                return "Błąd transkrypcji: Brak tekstu w wyniku"
 
-                {text}
+            print("Transkrypcja zakończona sukcesem")
+            return result["text"]
+        except Exception as e:
+            error_msg = f"Błąd podczas transkrypcji: {str(e)}"
+            print(f"BŁĄD KRYTYCZNY: {error_msg}")
+            traceback.print_exc()
+            return error_msg
 
-                Podsumowanie:
-                """)
-
-            try:
-                # Konwertuj plik tekstowy do formatu audio wymaganego przez API
-                # W rzeczywistości API powinno obsługiwać bezpośrednio teksty, ale zakładam że tak działa
-                # Można dostosować ApiController dodając metodę do bezpośredniej obsługi tekstów
-                with open(temp_path, "rb") as f:
-                    file_obj = io.BytesIO(f.read())
-
-                # Wywołaj API przez ApiController, używając konwersji pliku
-                result = await asyncio.to_thread(
-                    ApiController.transcribe_with_ollama_config,
-                    file_obj,
-                    config
-                )
-
-                return result["text"]
-            finally:
-                # Zawsze usuń tymczasowy plik
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-
+    async def summarize_with_ollama(self, text, user_id=None):
+        """Tworzy podsumowanie tekstu przez tekstowy endpoint API (Ollama)."""
+        try:
+            print(f"Generowanie podsumowania dla tekstu o długości {len(text)} znaków...")
+            context = self.user_contexts.get(user_id) if user_id is not None else None
+            result = await asyncio.to_thread(
+                ApiController.summarize,
+                text,
+                self.ollama_model,
+                None,        # system_prompt - domyślny z API
+                0.0,         # temperature
+                context,     # kontekst użytkownika (opcjonalny)
+            )
+            return result["text"]
         except Exception as e:
             print(f"Błąd podczas generowania podsumowania: {str(e)}")
             traceback.print_exc()
             return f"Błąd podczas generowania podsumowania: {str(e)}"
 
-    async def transcribe_audio(self, filepath):
-        """Transkrybuje plik audio na tekst używając ApiController"""
-        print(f"Rozpoczynam transkrypcję pliku: {filepath}")
+    async def summarize_session(self, session, requester_id=None, label="all"):
+        """
+        Tworzy podsumowanie całej sesji (połączone transkrypcje uczestników),
+        zapisuje je do pliku w magazynie i zwraca tekst podsumowania.
+        """
+        combined = await asyncio.to_thread(self.store.build_combined_text, session)
+        if not combined.strip():
+            return None
+        summary = await self.summarize_with_ollama(combined, user_id=requester_id)
+        await asyncio.to_thread(self.store.add_summary, session["id"], label, summary)
+        return summary
 
-        try:
-            abs_path = os.path.abspath(filepath)
-            print(f"Pełna ścieżka do pliku: {abs_path}")
-
-            # Sprawdź czy plik istnieje
-            if not os.path.exists(abs_path):
-                print(f"BŁĄD: Plik nie istnieje w ścieżce: {abs_path}")
-                return f"Błąd transkrypcji: Plik nie istnieje w ścieżce {abs_path}"
-
-            # Sprawdź czy plik nie jest pusty
-            file_size = os.path.getsize(abs_path)
-            print(f"Rozmiar pliku: {file_size} bajtów")
-            if file_size == 0:
-                print("BŁĄD: Plik jest pusty")
-                return "Błąd transkrypcji: Plik jest pusty"
-
-            # Użyj ApiController do transkrypcji
-            print("Rozpoczynam transkrypcję przez API...")
-
-            async def transcribe_via_api():
-                # Użyj Whisper jako domyślny model, chyba że jest niedostępny
-                try:
-                    # Sprawdź najpierw stan usług
-                    health = ApiController.check_health()
-
-                    # Wybierz model - Whisper jeśli dostępny, w przeciwnym razie Ollama
-                    if health['services']['whisper'].get('loaded'):
-                        # Użyj Whisper
-                        result = ApiController.transcribe(abs_path, ModelType.WHISPER)
-                        print("Transkrypcja Whisper zakończona")
-                        return result
-                    else:
-                        # Jeśli Whisper niedostępny, użyj Ollama jako fallback
-                        if health['services']['ollama'].get('available'):
-                            print("Model Whisper niedostępny, używam Ollama jako fallback")
-                            result = ApiController.transcribe(abs_path, ModelType.OLLAMA, self.ollama_model)
-                            print("Transkrypcja Ollama zakończona")
-                            return result
-                        else:
-                            raise RuntimeError("Ani Whisper, ani Ollama nie są dostępne!")
-                except Exception as e:
-                    print(f"Błąd podczas wyboru modelu transkrypcji: {str(e)}")
-                    # Próbuj użyć Whisper jako ostateczność
-                    result = ApiController.transcribe(abs_path, ModelType.WHISPER)
-                    return result
-
-            # Uruchom transkrypcję asynchronicznie
-            result = await transcribe_via_api()
-
-            # Sprawdź czy mamy tekst w wyniku
-            if not result or "text" not in result:
-                print("BŁĄD: Brak tekstu w wyniku transkrypcji")
-                return "Błąd transkrypcji: Brak tekstu w wyniku"
-
-            print("Transkrypcja zakończona sukcesem")
-            return result["text"]
-
-        except Exception as e:
-            error_msg = f"Błąd podczas transkrypcji: {str(e)}"
-            print(f"BŁĄD KRYTYCZNY: {error_msg}")
-            print(f"Szczegóły pliku:")
-            print(f"- Ścieżka: {abs_path}")
-            print(f"- Istnieje: {os.path.exists(abs_path)}")
-            if os.path.exists(abs_path):
-                print(f"- Rozmiar: {os.path.getsize(abs_path)}")
-                print(f"- Uprawnienia: {oct(os.stat(abs_path).st_mode)[-3:]}")
-            traceback.print_exc()
-            return error_msg
-
-    # Komendy zostały przeniesione do osobnych plików
-    # Zobacz: commands/recording_commands.py, commands/utility_commands.py
+    # Komendy znajdują się w:
+    #   cogs/commands/recording_commands.py
+    #   cogs/commands/utility_commands.py
+    #   cogs/commands/transcription_commands.py

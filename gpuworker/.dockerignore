@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+uploads/
+models/
+*.wav
+*.mp3
+.idea/
+.vscode/

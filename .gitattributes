@@ -1,0 +1,9 @@
+# Normalizacja końców linii - LF w repo (build odbywa się na Linuksie).
+* text=auto eol=lf
+
+# Pliki binarne - bez normalizacji.
+*.wav binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.pt  binary

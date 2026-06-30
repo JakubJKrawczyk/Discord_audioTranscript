@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import os
+
 import discord
-from discord.ext import commands
+from dotenv import load_dotenv
+
+# Wczytaj zmienne środowiskowe z pliku .env (jeśli istnieje)
+load_dotenv()
+
 
 class BotConfig:
     # Konfiguracja podstawowa
-    DEFAULT_PREFIX = '/'
-    DEFAULT_TOKEN = "MTMzOTY2MjU4Nzg5NzU3NzYxNA.GEaL7g.KmdHfYJxn6N5WX-VSuTWk47wy7FI1ORLen0nuM"
+    DEFAULT_PREFIX = os.environ.get("BOT_PREFIX", "!")
+
+    # UWAGA: token NIE jest już trzymany w kodzie. Pochodzi wyłącznie ze
+    # zmiennej środowiskowej DISCORD_TOKEN (np. z pliku .env). Stary token
+    # wpisany na sztywno został skompromitowany i należy go unieważnić.
+    TOKEN = os.environ.get("DISCORD_TOKEN")
 
     # Konfiguracja intencji
     INTENTS = discord.Intents.default()
@@ -14,17 +24,34 @@ class BotConfig:
     INTENTS.voice_states = True
 
     # Konfiguracja modeli AI
-    WHISPER_MODEL_SIZE = "large"
-    OLLAMA_URL = "http://localhost:11434/api/generate"
-    OLLAMA_DEFAULT_MODEL = "deepseek-r1:14b"
+    WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large")
+    OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "deepseek-r1:14b")
 
-    API_URL = "http://localhost:8000"
+    # Adres serwera transkrypcji (gpuworker)
+    API_URL = os.environ.get("API_URL", "http://localhost:8000")
+
     # Konfiguracja ścieżek
-    import os
-    RECORDINGS_DIR = os.path.join(os.getcwd(), "recordings")
+    RECORDINGS_DIR = os.environ.get(
+        "RECORDINGS_DIR", os.path.join(os.getcwd(), "recordings")
+    )
+    # Trwały magazyn transkrypcji i podsumowań
+    DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data"))
 
-    # Konfiguracja audio
-    AUDIO_FORMAT = 1  # pyaudio.paInt16
-    AUDIO_CHANNELS = 1  # Mono
+    # Po ilu dniach usuwać pliki audio (transkrypcje trzymane są bezterminowo)
+    AUDIO_RETENTION_DAYS = int(os.environ.get("AUDIO_RETENTION_DAYS", "7"))
+
+    # Konfiguracja audio z Discorda (PCM odbierany z voice gateway)
+    # Discord zawsze wysyła 48 kHz, 16-bit, stereo.
+    AUDIO_CHANNELS = 2
     AUDIO_SAMPLE_WIDTH = 2  # 16-bit
-    AUDIO_CHUNK_SIZE = 1024  # Rozmiar bufora audio
+    AUDIO_SAMPLE_RATE = 48000
+
+    @classmethod
+    def require_token(cls) -> str:
+        """Zwraca token bota albo zgłasza czytelny błąd, jeśli go brakuje."""
+        if not cls.TOKEN:
+            raise RuntimeError(
+                "Brak tokenu bota. Ustaw zmienną środowiskową DISCORD_TOKEN "
+                "(np. w pliku bot/.env - patrz .env.example)."
+            )
+        return cls.TOKEN

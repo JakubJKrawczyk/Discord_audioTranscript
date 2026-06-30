@@ -1,0 +1,13 @@
+.env
+*.env
+!*.env.example
+__pycache__/
+*.py[cod]
+recordings/
+data/
+*.wav
+*.mp3
+start.sh
+alsa.conf
+.idea/
+.vscode/

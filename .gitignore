@@ -1,0 +1,33 @@
+# Sekrety / konfiguracja środowiskowa
+.env
+bot/.env
+*.env
+!*.env.example
+
+# Nagrania
+recordings/
+bot/recordings/
+*.wav
+*.mp3
+
+# Trwały magazyn transkrypcji/podsumowań (dane użytkownika)
+data/
+bot/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Modele / cache
+*.pt
+.cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

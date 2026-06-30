@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import discord
-from discord.ext import commands
-from discord import app_commands
-import asyncio
-import wave
-import datetime
 import os
-import pyaudio
+import wave
+import asyncio
+import datetime
+import traceback
 from typing import Optional
+
+import discord
+from discord import app_commands
+from discord.ext import voice_recv
+
 import sys
 sys.path.append('../..')
 from consts import Consts
+from config import BotConfig
+from utils.audio_sink import PerUserPCMSink
+
 
 class RecordingCommands:
     def __init__(self, audio_recorder):
         self.cog = audio_recorder
         self.bot = audio_recorder.bot
 
-        # Rejestracja tradycyjnych komend
         self.register_commands()
-
-        # Rejestracja slash komend
         self.register_slash_commands()
 
     def register_commands(self):
-        """Rejestruje tradycyjne komendy"""
+        """Rejestruje tradycyjne komendy (prefixowe)."""
 
         @self.bot.command()
         async def record_user(ctx, member: discord.Member = None, filename: str = "recording"):
@@ -44,7 +46,7 @@ class RecordingCommands:
             await self._stop(ctx)
 
     def register_slash_commands(self):
-        """Rejestruje slash komendy"""
+        """Rejestruje slash komendy."""
 
         @self.bot.tree.command(name="record_user", description="Rozpoczyna nagrywanie konkretnego użytkownika")
         @app_commands.describe(
@@ -74,12 +76,13 @@ class RecordingCommands:
             await self._stop(ctx)
 
     async def create_context_from_interaction(self, interaction):
-        """Tworzy pseudo-kontekst dla obsługi interakcji slash komend"""
+        """Tworzy pseudo-kontekst dla obsługi slash komend."""
         class PseudoContext:
             def __init__(self, interaction):
                 self.interaction = interaction
                 self.author = interaction.user
                 self.voice = interaction.user.voice
+                self.guild = interaction.guild
                 self.followup = interaction.followup
 
             async def send(self, *args, **kwargs):
@@ -87,121 +90,124 @@ class RecordingCommands:
 
         return PseudoContext(interaction)
 
-    async def _record_user(self, ctx, member = None, filename = "recording"):
-        """Implementacja komendy nagrywania pojedynczego użytkownika"""
+    async def _connect_and_listen(self, ctx, channel):
+        """Łączy się z kanałem głosowym i zaczyna nasłuchiwać audio per-user."""
+        guild = channel.guild
+
+        # Zamknij ewentualne poprzednie połączenie głosowe w tej gildii.
+        if guild.voice_client is not None:
+            await guild.voice_client.disconnect(force=True)
+
+        voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient)
+        sink = PerUserPCMSink()
+        voice_client.listen(sink)
+
+        self.cog.current_channel = channel
+        self.cog.voice_client = voice_client
+        self.cog.sink = sink
+        return voice_client, sink
+
+    async def _record_user(self, ctx, member=None, filename="recording"):
+        """Nagrywanie pojedynczego użytkownika."""
         if self.cog.recording:
-            await ctx.send("Nagrywanie już trwa! Użyj !stop aby zakończyć.")
+            await ctx.send("Nagrywanie już trwa! Użyj /stop aby zakończyć.")
             return
 
-        # Sprawdź czy użytkownik jest na kanale głosowym
         if not ctx.author.voice:
             await ctx.send("Musisz być na kanale głosowym!")
             return
 
-        # Jeśli nie podano członka, nagraj autora
         target_user = member if member else ctx.author
 
         try:
-            # Dołącz do kanału głosowego
             channel = ctx.author.voice.channel
-            self.cog.current_channel = channel
-            voice_client = await channel.connect()
+            await self._connect_and_listen(ctx, channel)
             await ctx.send(Consts.WCHODZI_NA_KANAL)
 
-            # Ustaw tryb nagrywania
             self.cog.recording_users = {str(target_user.id): filename}
-            self.cog.frames = {}  # Wyczyść ramki
-
-            # Rozpocznij nagrywanie
             self.cog.recording = True
+
             await ctx.send(Consts.ZACZYNA_NAGRYWANIE)
-
-            print(f"wykryto {self.cog.audio.get_device_count()} urządzeń wejściowych")
-            # Konfiguracja streamu audio
-            default_input = self.cog.audio.get_default_input_device_info()
-
-            self.cog.stream = self.cog.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=int(default_input['defaultSampleRate']),
-                input=True,
-                input_device_index=default_input['index'],
-                frames_per_buffer=1024,
-                stream_callback=self.cog.callback
+            await ctx.send(
+                f"Rozpoczęto nagrywanie użytkownika {target_user.display_name} "
+                f"(plik: {filename})! Użyj /stop aby zakończyć."
             )
-
-            self.cog.stream.start_stream()
-            await ctx.send(f"Rozpoczęto nagrywanie użytkownika {target_user.display_name} (plik: {filename})! Użyj !stop aby zakończyć.")
             await ctx.send(Consts.RECORD_USER)
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
-            self.cog.recording = False
-            self.cog.recording_users = {}
-            if self.cog.stream:
-                self.cog.stream.stop_stream()
-                self.cog.stream.close()
+            traceback.print_exc()
+            await self._cleanup_voice()
 
-    async def _record_all(self, ctx, filename_prefix = "recording"):
-        """Implementacja komendy nagrywania wszystkich użytkowników"""
+    async def _record_all(self, ctx, filename_prefix="recording"):
+        """Nagrywanie wszystkich użytkowników na kanale."""
         if self.cog.recording:
-            await ctx.send("Nagrywanie już trwa! Użyj !stop aby zakończyć.")
+            await ctx.send("Nagrywanie już trwa! Użyj /stop aby zakończyć.")
             return
 
-        # Sprawdź czy użytkownik jest na kanale głosowym
         if not ctx.author.voice:
             await ctx.send("Musisz być na kanale głosowym!")
             return
 
         try:
-            # Dołącz do kanału głosowym
             channel = ctx.author.voice.channel
-            self.cog.current_channel = channel
-            voice_client = await channel.connect()
+            await self._connect_and_listen(ctx, channel)
             await ctx.send(Consts.WCHODZI_NA_KANAL)
 
-            # Pobierz wszystkich użytkowników na kanale (oprócz botów)
-            users_to_record = {}
-            for member in channel.members:
-                if not member.bot:
-                    users_to_record[str(member.id)] = f"{filename_prefix}_{member.display_name}"
-
-            # Ustaw tryb nagrywania
+            users_to_record = {
+                str(member.id): f"{filename_prefix}_{member.display_name}"
+                for member in channel.members if not member.bot
+            }
             self.cog.recording_users = users_to_record
-            self.cog.frames = {}  # Wyczyść ramki
-
-            # Rozpocznij nagrywanie
             self.cog.recording = True
+
             await ctx.send(Consts.ZACZYNA_NAGRYWANIE)
-
-            # Konfiguracja streamu audio
-            default_input = self.cog.audio.get_default_input_device_info()
-
-            self.cog.stream = self.cog.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=int(default_input['defaultSampleRate']),
-                input=True,
-                input_device_index=default_input['index'],
-                frames_per_buffer=1024,
-                stream_callback=self.cog.callback
+            users_str = ", ".join(m.display_name for m in channel.members if not m.bot)
+            await ctx.send(
+                f"Rozpoczęto nagrywanie wszystkich na kanale {channel.name} "
+                f"(użytkownicy: {users_str})! Użyj /stop aby zakończyć."
             )
-
-            self.cog.stream.start_stream()
-            users_str = ", ".join([member.display_name for member in channel.members if not member.bot])
-            await ctx.send(f"Rozpoczęto nagrywanie wszystkich użytkowników na kanale {channel.name} (użytkownicy: {users_str})! Użyj !stop aby zakończyć.")
             await ctx.send(Consts.RECORD_ALL)
-            await ctx.send("dupa")
-
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
-            self.cog.recording = False
-            self.cog.recording_users = {}
-            if self.cog.stream:
-                self.cog.stream.stop_stream()
-                self.cog.stream.close()
+            traceback.print_exc()
+            await self._cleanup_voice()
+
+    async def _cleanup_voice(self):
+        """Zatrzymuje nasłuch i rozłącza klienta głosowego."""
+        self.cog.recording = False
+        vc = self.cog.voice_client
+        if vc is not None:
+            try:
+                if vc.is_listening():
+                    vc.stop_listening()
+            except Exception:
+                pass
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+        self.cog.voice_client = None
+        self.cog.sink = None
+
+    def _save_wav(self, frames: bytes, filepath: str):
+        """Zapisuje surowe PCM (48 kHz, stereo, 16-bit) do pliku WAV."""
+        with wave.open(filepath, 'wb') as wf:
+            wf.setnchannels(BotConfig.AUDIO_CHANNELS)
+            wf.setsampwidth(BotConfig.AUDIO_SAMPLE_WIDTH)
+            wf.setframerate(BotConfig.AUDIO_SAMPLE_RATE)
+            wf.writeframes(frames)
+
+    @staticmethod
+    async def _send_chunks(ctx, text, header=None):
+        """Wysyła długi tekst w kawałkach po 1900 znaków (limit Discorda)."""
+        if header:
+            await ctx.send(header)
+        text = text or "(pusto)"
+        for i in range(0, len(text), 1900):
+            await ctx.send(text[i:i + 1900])
 
     async def _stop(self, ctx):
-        """Implementacja komendy zatrzymania nagrywania"""
+        """Zatrzymuje nagrywanie, zapisuje pliki, transkrybuje i podsumowuje."""
         if not self.cog.recording:
             await ctx.send("Nie ma aktywnego nagrywania!")
             return
@@ -209,93 +215,79 @@ class RecordingCommands:
         try:
             self.cog.recording = False
 
-            # Zatrzymaj stream
-            if self.cog.stream:
-                self.cog.stream.stop_stream()
-                self.cog.stream.close()
+            # Przechwyć bufory zanim rozłączymy klienta.
+            sink = self.cog.sink
+            buffers = dict(sink.buffers) if sink else {}
+
+            vc = self.cog.voice_client
+            if vc is not None:
+                if vc.is_listening():
+                    vc.stop_listening()
+                await vc.disconnect(force=True)
+            self.cog.voice_client = None
+            self.cog.sink = None
+
             await ctx.send(Consts.ZAKONCZENIE_NAGRYWANIA)
 
-            # Zapisz pliki audio dla każdego nagrywanego użytkownika
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            # Sprawdź, którzy użytkownicy mają dane do zapisania
-            saved_files = []
-            transcriptions = {}
+            channel_name = self.cog.current_channel.name if self.cog.current_channel else "?"
+            session_transcripts = {}  # uid -> {display_name, text, audio_file}
 
             for user_id, filename_base in self.cog.recording_users.items():
-                frames_to_save = self.cog.frames.get(user_id, [])
-
-                if not frames_to_save:
+                pcm = buffers.get(user_id)
+                if not pcm:
                     print(f"Brak danych audio dla użytkownika {user_id}")
                     continue
 
-                # Tworzenie nazwy pliku
-                filename = os.path.join(self.cog.recordings_dir, f"{filename_base}_{timestamp}.wav")
+                filename = os.path.join(
+                    self.cog.recordings_dir, f"{filename_base}_{timestamp}.wav"
+                )
+                self._save_wav(bytes(pcm), filename)
+                print(f"Zapisano {filename} ({len(pcm)} bajtów PCM)")
 
-                print(f"Zapisuję plik: {filename}")  # Debug info
-
-                # Zapisz plik WAV
-                with wave.open(filename, 'wb') as wf:
-                    wf.setnchannels(1)  # Mono
-                    wf.setsampwidth(self.cog.audio.get_sample_size(pyaudio.paInt16))
-                    wf.setframerate(int(self.cog.audio.get_default_input_device_info()['defaultSampleRate']))
-                    audio_data = b''.join(frames_to_save)
-                    print(f"Rozmiar danych audio dla użytkownika {user_id}: {len(audio_data)} bajtów")
-                    wf.writeframes(audio_data)
-
-                saved_files.append(filename)
-
-                # Wykonaj transkrypcję dla tego pliku
-                await ctx.send(f"Rozpoczynam transkrypcję dla użytkownika {self.cog.get_username_by_id(user_id)}...")
+                display = self.cog.get_username_by_id(user_id)
+                await ctx.send(f"Rozpoczynam transkrypcję dla użytkownika {display}...")
                 await ctx.send(Consts.PROCESOWANIE)
 
-                transcription = await self.cog.transcribe_audio(filename)
-                transcriptions[user_id] = transcription
+                text = await self.cog.transcribe_audio(filename)
+                session_transcripts[user_id] = {
+                    "display_name": display,
+                    "text": text,
+                    "audio_file": filename,
+                }
 
-            # Rozłącz się z kanału głosowego
-            for vc in self.bot.voice_clients:
-                await vc.disconnect()
-
-            if not saved_files:
+            if not session_transcripts:
                 await ctx.send("Brak danych audio do zapisania.")
                 return
 
-            # Zapisz transkrypcje dla użytkownika, który wywołał !stop
-            user_id = ctx.author.id
-            self.cog.transcriptions[user_id] = transcriptions
+            # Zapisz sesję w trwałym magazynie (nadaje ID transkrypcji).
+            session = await asyncio.to_thread(
+                self.cog.store.add_session, channel_name, session_transcripts
+            )
 
-            # Wyślij informacje o zapisanych plikach
-            await ctx.send(f"Zapisano {len(saved_files)} plików audio w folderze {self.cog.recordings_dir}")
+            participants = ", ".join(d["display_name"] for d in session_transcripts.values())
+            await ctx.send(
+                f"Zapisano transkrypcję **{session['id']}** "
+                f"({len(session_transcripts)} uczestn.: {participants})."
+            )
 
-            # Wyślij transkrypcje
-            await ctx.send("Transkrypcje:")
-            for user_id, transcription in transcriptions.items():
-                username = self.cog.get_username_by_id(user_id)
-                await ctx.send(f"**Transkrypcja dla {username}:**")
-                for i in range(0, len(transcription), 1900):
-                    await ctx.send(transcription[i:i+1900])
+            for data in session_transcripts.values():
+                await self._send_chunks(
+                    ctx, data["text"], header=f"**Transkrypcja dla {data['display_name']}:**"
+                )
 
-            # Automatycznie generuj podsumowania dla każdego użytkownika
-            await ctx.send("Generuję podsumowania...")
-            summaries = {}
-
-            for user_id, transcription in transcriptions.items():
-                if len(transcription) > 30:  # Jeśli jest co podsumowywać
-                    username = self.cog.get_username_by_id(user_id)
-                    await ctx.send(f"Generuję podsumowanie dla {username}...")
-                    summary = await self.cog.summarize_with_ollama(transcription)
-                    summaries[user_id] = summary
+            # Automatyczne podsumowanie całej sesji (zapisywane do pliku).
             await ctx.send(Consts.SUMARIZE)
-            # Wyślij podsumowania
-            if summaries:
-                await ctx.send("**Podsumowania:**")
-                for user_id, summary in summaries.items():
-                    username = self.cog.get_username_by_id(user_id)
-                    await ctx.send(f"**Podsumowanie dla {username}:**\n{summary}")
+            await ctx.send("Generuję podsumowanie...")
+            summary = await self.cog.summarize_session(
+                session, requester_id=ctx.author.id, label="auto"
+            )
+            if summary:
+                await self._send_chunks(ctx, summary, header="**Podsumowanie:**")
             await ctx.send(Consts.SUMARIZE_2)
             await ctx.send(Consts.FINISH)
 
         except Exception as e:
             await ctx.send(f"Wystąpił błąd podczas zatrzymywania nagrywania: {str(e)}")
-            import traceback
             traceback.print_exc()
+            await self._cleanup_voice()

@@ -1,0 +1,114 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Ollama - lokalny silnik modeli językowych (podsumowania), na GPU
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    networks:
+      - transcription-network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Jednorazowe pobranie modelu do Ollamy (uruchamia się raz i kończy)
+  # ---------------------------------------------------------------------------
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "ollama pull ${OLLAMA_DEFAULT_MODEL:-deepseek-r1:14b}"]
+    networks:
+      - transcription-network
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Whisper API (gpuworker) - transkrypcja audio (GPU) + endpoint /summarize/
+  # ---------------------------------------------------------------------------
+  whisper-api:
+    build:
+      context: ./gpuworker
+      dockerfile: Dockerfile
+    image: whisper-ollama-api:latest
+    container_name: whisper-ollama-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Adres Ollamy wewnątrz sieci compose (stała infrastrukturalna).
+      - OLLAMA_API_URL=http://ollama:11434
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - whisper-models:/models
+    networks:
+      - transcription-network
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # Model Whisper "large" ładuje się długo - daj zapas czasu na start.
+      start_period: 300s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Bot Discord (CPU)
+  # ---------------------------------------------------------------------------
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    image: discord-audio-bot:latest
+    container_name: discord-audio-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Adres serwera transkrypcji wewnątrz sieci compose (stała infrastrukturalna).
+      - API_URL=http://whisper-api:8000
+    volumes:
+      # Audio (czyszczone po N dniach) i trwały magazyn transkrypcji/podsumowań.
+      - ./recordings:/app/recordings
+      - ./data:/app/data
+    networks:
+      - transcription-network
+    depends_on:
+      whisper-api:
+        condition: service_healthy
+
+networks:
+  transcription-network:
+    driver: bridge
+
+volumes:
+  ollama-models:
+    driver: local
+  whisper-models:
+    driver: local

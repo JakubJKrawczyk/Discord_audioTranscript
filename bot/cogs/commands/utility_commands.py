@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import asyncio
+
 import discord
-from discord.ext import commands
 from discord import app_commands
-import requests
-import subprocess
 from typing import Optional
 import sys
 sys.path.append('../..')
 from consts import Consts
+from utils.ApiController import ApiController
 
 class UtilityCommands:
     def __init__(self, audio_recorder):
@@ -43,11 +43,6 @@ class UtilityCommands:
             await self._change_model(ctx, model_name)
 
         @self.bot.command()
-        async def summarize(ctx):
-            """Tworzy podsumowanie ostatniej transkrypcji"""
-            await self._summarize(ctx)
-
-        @self.bot.command()
         async def list_models(ctx):
             """Wyświetla dostępne modele Ollama"""
             await self._list_models(ctx)
@@ -73,10 +68,6 @@ class UtilityCommands:
         @app_commands.describe(model_name="Nazwa modelu do użycia")
         async def change_model_slash(interaction: discord.Interaction, model_name: str):
             await self._change_model_slash(interaction, model_name)
-
-        @self.bot.tree.command(name="summarize", description="Tworzy podsumowanie ostatniej transkrypcji")
-        async def summarize_slash(interaction: discord.Interaction):
-            await self._summarize_slash(interaction)
 
         @self.bot.tree.command(name="list_models", description="Wyświetla dostępne modele Ollama")
         async def list_models_slash(interaction: discord.Interaction):
@@ -114,157 +105,79 @@ class UtilityCommands:
         context = self.cog.user_contexts.get(user_id, "Brak ustawionego kontekstu")
         await interaction.response.send_message(f"Twój aktualny kontekst:\n{context}", ephemeral=True)
 
+    async def _model_names(self):
+        """Zwraca listę nazw modeli dostępnych na serwerze Ollama."""
+        models = await asyncio.to_thread(ApiController.list_ollama_models)
+        return [m.get("name") for m in models if m.get("name")]
+
     async def _change_model(self, ctx, model_name):
         """Implementacja komendy zmiany modelu"""
         old_model = self.cog.ollama_model
-        self.cog.ollama_model = model_name
-
-        # Sprawdź czy model istnieje i pobierz go jeśli nie
         try:
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                available_models = response.json().get("models", [])
-                model_names = [model.get("name") for model in available_models]
-
-                if model_name not in model_names:
-                    await ctx.send(f"Model {model_name} nie jest zainstalowany. Rozpoczynam pobieranie...")
-
-                    # Użyj subprocess do pobrania modelu w tle
-                    subprocess.Popen(["ollama", "pull", model_name])
-                    await ctx.send(f"Pobieranie modelu {model_name} rozpoczęte w tle. Może to potrwać kilka minut.")
-                else:
-                    await ctx.send(f"Zmieniono model z {old_model} na {model_name}.")
-            else:
-                await ctx.send("Nie można połączyć z Ollama API. Upewnij się, że serwer jest uruchomiony.")
+            model_names = await self._model_names()
+            if model_name not in model_names:
+                await ctx.send(
+                    f"Model {model_name} nie jest dostępny na serwerze Ollama. "
+                    f"Pobierz go na serwerze: `ollama pull {model_name}`."
+                )
+                return
+            self.cog.ollama_model = model_name
+            await ctx.send(f"Zmieniono model z {old_model} na {model_name}.")
         except Exception as e:
             await ctx.send(f"Błąd podczas zmiany modelu: {str(e)}")
-            self.cog.ollama_model = old_model  # Przywróć poprzedni model
 
     async def _change_model_slash(self, interaction, model_name):
         """Implementacja slash komendy zmiany modelu"""
+        await interaction.response.defer(ephemeral=False)
         old_model = self.cog.ollama_model
-        self.cog.ollama_model = model_name
-
-        # Sprawdź czy model istnieje i pobierz go jeśli nie
         try:
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                available_models = response.json().get("models", [])
-                model_names = [model.get("name") for model in available_models]
-
-                if model_name not in model_names:
-                    await interaction.response.send_message(
-                        f"Model {model_name} nie jest zainstalowany. Rozpoczynam pobieranie...", ephemeral=False)
-
-                    # Użyj subprocess do pobrania modelu w tle
-                    subprocess.Popen(["ollama", "pull", model_name])
-                    await interaction.followup.send(
-                        f"Pobieranie modelu {model_name} rozpoczęte w tle. Może to potrwać kilka minut.")
-                else:
-                    await interaction.response.send_message(f"Zmieniono model z {old_model} na {model_name}.",
-                                                            ephemeral=False)
-            else:
-                await interaction.response.send_message(
-                    "Nie można połączyć z Ollama API. Upewnij się, że serwer jest uruchomiony.", ephemeral=True)
+            model_names = await self._model_names()
+            if model_name not in model_names:
+                await interaction.followup.send(
+                    f"Model {model_name} nie jest dostępny na serwerze Ollama. "
+                    f"Pobierz go na serwerze: `ollama pull {model_name}`."
+                )
+                return
+            self.cog.ollama_model = model_name
+            await interaction.followup.send(f"Zmieniono model z {old_model} na {model_name}.")
         except Exception as e:
-            await interaction.response.send_message(f"Błąd podczas zmiany modelu: {str(e)}", ephemeral=True)
-            self.cog.ollama_model = old_model  # Przywróć poprzedni model
+            await interaction.followup.send(f"Błąd podczas zmiany modelu: {str(e)}")
 
-    async def _summarize(self, ctx):
-        """Implementacja komendy podsumowania"""
-        user_id = ctx.author.id
-        if user_id not in self.cog.transcriptions:
-            await ctx.send("Nie znaleziono transkrypcji do podsumowania!")
-            return
-
-        transcriptions = self.cog.transcriptions[user_id]
-
-        if isinstance(transcriptions, str):
-            # Jeśli to pojedyncza transkrypcja (stary format)
-            await ctx.send("Generuję podsumowanie...")
-            summary = await self.cog.summarize_with_ollama(transcriptions)
-            await ctx.send(f"**Podsumowanie:**\n{summary}")
-        else:
-            # Jeśli to słownik transkrypcji po użytkownikach
-            await ctx.send("Generuję podsumowania dla każdego użytkownika...")
-
-            for user_id, transcription in transcriptions.items():
-                username = self.cog.get_username_by_id(user_id)
-                await ctx.send(f"Generuję podsumowanie dla {username}...")
-                summary = await self.cog.summarize_with_ollama(transcription)
-                await ctx.send(f"**Podsumowanie dla {username}:**\n{summary}")
-
-    async def _summarize_slash(self, interaction):
-        """Implementacja slash komendy podsumowania"""
-        user_id = interaction.user.id
-        if user_id not in self.cog.transcriptions:
-            await interaction.response.send_message("Nie znaleziono transkrypcji do podsumowania!", ephemeral=True)
-            return
-
-        transcriptions = self.cog.transcriptions[user_id]
-
-        if isinstance(transcriptions, str):
-            # Jeśli to pojedyncza transkrypcja (stary format)
-            await interaction.response.send_message("Generuję podsumowanie...", ephemeral=False)
-            summary = await self.cog.summarize_with_ollama(transcriptions)
-            await interaction.followup.send(f"**Podsumowanie:**\n{summary}")
-        else:
-            # Jeśli to słownik transkrypcji po użytkownikach
-            await interaction.response.send_message("Generuję podsumowania dla każdego użytkownika...", ephemeral=False)
-
-            for user_id, transcription in transcriptions.items():
-                username = self.cog.get_username_by_id(user_id)
-                await interaction.followup.send(f"Generuję podsumowanie dla {username}...")
-                summary = await self.cog.summarize_with_ollama(transcription)
-                await interaction.followup.send(f"**Podsumowanie dla {username}:**\n{summary}")
+    @staticmethod
+    def _format_models(models):
+        lines = []
+        for model in models:
+            name = model.get("name", "Nieznany")
+            size = model.get("size", 0) / (1024 * 1024 * 1024)  # GB
+            lines.append(f"• {name} ({size:.2f} GB)")
+        return lines
 
     async def _list_models(self, ctx):
         """Implementacja komendy listowania modeli"""
         try:
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                available_models = response.json().get("models", [])
-                if not available_models:
-                    await ctx.send("Brak dostępnych modeli Ollama.")
-                    return
-
-                model_info = []
-                for model in available_models:
-                    name = model.get("name", "Nieznany")
-                    size = model.get("size", 0) / (1024 * 1024 * 1024)  # Konwersja na GB
-                    model_info.append(f"• {name} ({size:.2f} GB)")
-
-                await ctx.send("**Dostępne modele Ollama:**\n" + "\n".join(model_info))
-                await ctx.send(f"Aktualnie używany model: **{self.cog.ollama_model}**")
-            else:
-                await ctx.send("Nie można połączyć z Ollama API. Upewnij się, że serwer jest uruchomiony.")
+            models = await asyncio.to_thread(ApiController.list_ollama_models)
+            if not models:
+                await ctx.send("Brak dostępnych modeli Ollama.")
+                return
+            await ctx.send("**Dostępne modele Ollama:**\n" + "\n".join(self._format_models(models)))
+            await ctx.send(f"Aktualnie używany model: **{self.cog.ollama_model}**")
         except Exception as e:
             await ctx.send(f"Błąd podczas pobierania listy modeli: {str(e)}")
 
     async def _list_models_slash(self, interaction):
         """Implementacja slash komendy listowania modeli"""
+        await interaction.response.defer(ephemeral=False)
         try:
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                available_models = response.json().get("models", [])
-                if not available_models:
-                    await interaction.response.send_message("Brak dostępnych modeli Ollama.", ephemeral=True)
-                    return
-
-                model_info = []
-                for model in available_models:
-                    name = model.get("name", "Nieznany")
-                    size = model.get("size", 0) / (1024 * 1024 * 1024)  # Konwersja na GB
-                    model_info.append(f"• {name} ({size:.2f} GB)")
-
-                await interaction.response.send_message("**Dostępne modele Ollama:**\n" + "\n".join(model_info),
-                                                        ephemeral=False)
-                await interaction.followup.send(f"Aktualnie używany model: **{self.cog.ollama_model}**")
-            else:
-                await interaction.response.send_message(
-                    "Nie można połączyć z Ollama API. Upewnij się, że serwer jest uruchomiony.", ephemeral=True)
+            models = await asyncio.to_thread(ApiController.list_ollama_models)
+            if not models:
+                await interaction.followup.send("Brak dostępnych modeli Ollama.")
+                return
+            await interaction.followup.send(
+                "**Dostępne modele Ollama:**\n" + "\n".join(self._format_models(models))
+            )
+            await interaction.followup.send(f"Aktualnie używany model: **{self.cog.ollama_model}**")
         except Exception as e:
-            await interaction.response.send_message(f"Błąd podczas pobierania listy modeli: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"Błąd podczas pobierania listy modeli: {str(e)}")
 
     async def _help(self, ctx, command_name=None):
         """Implementacja komendy pomocy"""
@@ -302,13 +215,16 @@ class UtilityCommands:
 
             # Podziel komendy na kategorie
             recording_commands = []
+            transcript_commands = []
             ollama_commands = []
             utility_commands = []
 
             for command in sorted(self.bot.commands, key=lambda x: x.name):
                 if command.name in ['record_user', 'record_all', 'stop']:
                     recording_commands.append(f"`{command.name}`")
-                elif command.name in ['change_model', 'summarize', 'list_models']:
+                elif command.name in ['transcriptions', 'summarize', 'delete']:
+                    transcript_commands.append(f"`{command.name}`")
+                elif command.name in ['change_model', 'list_models']:
                     ollama_commands.append(f"`{command.name}`")
                 else:
                     utility_commands.append(f"`{command.name}`")
@@ -317,6 +233,13 @@ class UtilityCommands:
                 embed.add_field(
                     name="🎙️ Nagrywanie",
                     value=", ".join(recording_commands),
+                    inline=False
+                )
+
+            if transcript_commands:
+                embed.add_field(
+                    name="📜 Transkrypcje",
+                    value=", ".join(transcript_commands),
                     inline=False
                 )
 
@@ -371,39 +294,14 @@ class UtilityCommands:
             )
 
             # Podziel komendy na kategorie
-            recording_commands = []
-            ollama_commands = []
-            utility_commands = []
+            recording_commands = [f"`/{c}`" for c in ['record_user', 'record_all', 'stop']]
+            transcript_commands = [f"`/{c}`" for c in ['transcriptions', 'summarize', 'delete']]
+            ollama_commands = [f"`/{c}`" for c in ['change_model', 'list_models']]
+            utility_commands = [f"`/{c}`" for c in ['help', 'context', 'show_context']]
 
-            # Sprawdź dostępne slash komendy
-            for cmd_name in ['record_user', 'record_all', 'stop']:
-                recording_commands.append(f"`/{cmd_name}`")
-
-            for cmd_name in ['change_model', 'summarize', 'list_models']:
-                ollama_commands.append(f"`/{cmd_name}`")
-
-            for cmd_name in ['help', 'context', 'show_context']:
-                utility_commands.append(f"`/{cmd_name}`")
-
-            if recording_commands:
-                embed.add_field(
-                    name="🎙️ Nagrywanie",
-                    value=", ".join(recording_commands),
-                    inline=False
-                )
-
-            if ollama_commands:
-                embed.add_field(
-                    name="🤖 Ollama i przetwarzanie",
-                    value=", ".join(ollama_commands),
-                    inline=False
-                )
-
-            if utility_commands:
-                embed.add_field(
-                    name="🛠️ Pozostałe",
-                    value=", ".join(utility_commands),
-                    inline=False
-                )
+            embed.add_field(name="🎙️ Nagrywanie", value=", ".join(recording_commands), inline=False)
+            embed.add_field(name="📜 Transkrypcje", value=", ".join(transcript_commands), inline=False)
+            embed.add_field(name="🤖 Ollama i przetwarzanie", value=", ".join(ollama_commands), inline=False)
+            embed.add_field(name="🛠️ Pozostałe", value=", ".join(utility_commands), inline=False)
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
