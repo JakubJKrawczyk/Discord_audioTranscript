@@ -7,21 +7,23 @@ modelem **Ollama**. Transkrypcje są trwale zapisywane i zarządzalne komendami.
 ## Architektura
 
 ```
-Discord  ──►  bot  ──HTTP──►  whisper-api (gpuworker)  ──►  ollama
-                                  │  Whisper: transkrypcja
+Discord  ──►  bot  ──HTTP──►  whisper-api (gpuworker)  ──HTTPS──►  Ollama (host)
+                                  │  Whisper: transkrypcja           ollama.jakubkrawczyk.com
                                   │  Ollama:  podsumowania (/summarize/)
 ```
 
 Serwisy (docker-compose):
-- **ollama** – modele językowe (GPU)
-- **ollama-pull** – jednorazowo pobiera model do podsumowań
 - **whisper-api** – transkrypcja audio (GPU) + endpoint `/summarize/`
 - **bot** – klient Discord (CPU)
 
+Ollama **nie** jest w dockerze – używamy instancji na hoście (adres w
+`OLLAMA_API_URL`, domyślnie `https://ollama.jakubkrawczyk.com`). Modele
+zarządzasz po stronie hosta (`ollama pull ...`).
+
 ## Wymagania (serwer)
 - Docker + docker compose
-- GPU NVIDIA + sterownik + **nvidia-container-toolkit**
-  (potrzebne dla `ollama` i `whisper-api`)
+- GPU NVIDIA + sterownik + **nvidia-container-toolkit** (dla `whisper-api`)
+- Działająca Ollama na hoście, osiągalna pod `OLLAMA_API_URL`
 
 ## Uruchomienie
 
@@ -30,17 +32,17 @@ git clone <repo> && cd Discord_audioTranscript
 
 # Cała konfiguracja jest w JEDNYM pliku .env
 cp .env.example .env
-nano .env          # ustaw DISCORD_TOKEN (reszta ma sensowne domyślne wartości)
+nano .env          # ustaw DISCORD_TOKEN i OLLAMA_DEFAULT_MODEL (model z Twojej Ollamy)
 
 docker compose up -d --build
 docker compose logs -f bot
 ```
 
 Pierwszy start jest wolny: budowa obrazu z CUDA + pobranie modelu Whisper
-(`large` ≈ 3 GB) i modelu Ollama. Bot wstaje dopiero, gdy `whisper-api` jest
+(`large` ≈ 3 GB do wolumenu). Bot wstaje dopiero, gdy `whisper-api` jest
 „healthy" (do 5 min) – to celowe.
 
-> Brak GPU? Usuń bloki `deploy:` z `docker-compose.yml` (Whisper pojedzie na
+> Brak GPU? Usuń blok `deploy:` z `docker-compose.yml` (Whisper pojedzie na
 > CPU – wolno, zwłaszcza dla modelu `large`).
 
 ## Konfiguracja (`.env`)
@@ -50,12 +52,12 @@ Pierwszy start jest wolny: budowa obrazu z CUDA + pobranie modelu Whisper
 | `DISCORD_TOKEN` | token bota (wymagany) | – |
 | `BOT_PREFIX` | prefix komend tekstowych | `!` |
 | `WHISPER_MODEL` | rozmiar Whispera (`tiny`…`large`) | `large` |
-| `OLLAMA_DEFAULT_MODEL` | model do podsumowań | `deepseek-r1:14b` |
+| `OLLAMA_API_URL` | adres Ollamy na hoście | `https://ollama.jakubkrawczyk.com` |
+| `OLLAMA_DEFAULT_MODEL` | model do podsumowań (musi istnieć w Ollamie) | `gemma4:e4b` |
 | `AUDIO_RETENTION_DAYS` | po ilu dniach kasować audio | `7` |
 | `ALLOWED_ORIGINS` | dozwolone originy CORS | `*` |
 
-Adresy wewnątrz sieci compose (`whisper-api` ↔ `ollama` ↔ `bot`) ustawia samo
-compose – nie ma ich w `.env`.
+Adres `bot → whisper-api` (`http://whisper-api:8000`) ustawia samo compose.
 
 ## Komendy
 

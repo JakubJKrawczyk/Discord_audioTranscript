@@ -29,7 +29,7 @@ logger = logging.getLogger("whisper-api")
 
 # Globalne zmienne / konfiguracja
 whisper_model: Optional[Whisper] = None
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "https://ollama.jakubkrawczyk.com").rstrip("/")
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", 8000))
