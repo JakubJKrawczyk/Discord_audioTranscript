@@ -52,6 +52,7 @@ Pierwszy start jest wolny: budowa obrazu z CUDA + pobranie modelu Whisper
 | `DISCORD_TOKEN` | token bota (wymagany) | – |
 | `BOT_PREFIX` | prefix komend tekstowych | `!` |
 | `WHISPER_MODEL` | rozmiar Whispera (`tiny`…`large`) | `large` |
+| `WHISPER_LANGUAGE` | język transkrypcji (`pl`, `auto`, …) | `pl` |
 | `OLLAMA_API_URL` | adres Ollamy na hoście | `https://ollama.jakubkrawczyk.com` |
 | `OLLAMA_DEFAULT_MODEL` | model do podsumowań (musi istnieć w Ollamie) | `gemma4:e4b` |
 | `AUDIO_RETENTION_DAYS` | po ilu dniach kasować audio | `7` |

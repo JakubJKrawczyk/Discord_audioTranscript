@@ -72,8 +72,6 @@ class UtilityCommands:
         @self.bot.command()
         async def show_context(ctx):
             """Pokazuje aktualny kontekst użytkownika"""
-            await ctx.send(Consts.SHOW_CONTEXT)
-
             await self._show_context(ctx)
 
         @self.bot.command()

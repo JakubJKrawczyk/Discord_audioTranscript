@@ -127,12 +127,10 @@ class RecordingCommands:
             self.cog.recording_users = {str(target_user.id): filename}
             self.cog.recording = True
 
-            await ctx.send(Consts.ZACZYNA_NAGRYWANIE)
             await ctx.send(
-                f"Rozpoczęto nagrywanie użytkownika {target_user.display_name} "
-                f"(plik: {filename})! Użyj /stop aby zakończyć."
+                f"🔴 Nagrywam użytkownika **{target_user.display_name}**. "
+                f"Użyj `/stop`, aby zakończyć."
             )
-            await ctx.send(Consts.RECORD_USER)
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
             traceback.print_exc()
@@ -160,13 +158,11 @@ class RecordingCommands:
             self.cog.recording_users = users_to_record
             self.cog.recording = True
 
-            await ctx.send(Consts.ZACZYNA_NAGRYWANIE)
             users_str = ", ".join(m.display_name for m in channel.members if not m.bot)
             await ctx.send(
-                f"Rozpoczęto nagrywanie wszystkich na kanale {channel.name} "
-                f"(użytkownicy: {users_str})! Użyj /stop aby zakończyć."
+                f"🔴 Nagrywam kanał **{channel.name}** (uczestnicy: {users_str}). "
+                f"Użyj `/stop`, aby zakończyć."
             )
-            await ctx.send(Consts.RECORD_ALL)
         except Exception as e:
             await ctx.send(f"Wystąpił błąd: {str(e)}")
             traceback.print_exc()
@@ -246,8 +242,7 @@ class RecordingCommands:
                 print(f"Zapisano {filename} ({len(pcm)} bajtów PCM)")
 
                 display = self.cog.get_username_by_id(user_id)
-                await ctx.send(f"Rozpoczynam transkrypcję dla użytkownika {display}...")
-                await ctx.send(Consts.PROCESOWANIE)
+                await ctx.send(f"⏳ Transkrybuję nagranie użytkownika **{display}**...")
 
                 text = await self.cog.transcribe_audio(filename)
                 session_transcripts[user_id] = {
@@ -276,15 +271,9 @@ class RecordingCommands:
                     ctx, data["text"], header=f"**Transkrypcja dla {data['display_name']}:**"
                 )
 
-            # Automatyczne podsumowanie całej sesji (zapisywane do pliku).
-            await ctx.send(Consts.SUMARIZE)
-            await ctx.send("Generuję podsumowanie...")
-            summary = await self.cog.summarize_session(
-                session, requester_id=ctx.author.id, label="auto"
-            )
-            if summary:
-                await self._send_chunks(ctx, summary, header="**Podsumowanie:**")
-            await ctx.send(Consts.SUMARIZE_2)
+            # Surowa transkrypcja jest zapisana. Podsumowanie tworzy się osobno
+            # na żądanie: /summarize <ID>.
+            await ctx.send(f"Aby podsumować: `/summarize {session['id']}`")
             await ctx.send(Consts.FINISH)
 
         except Exception as e:

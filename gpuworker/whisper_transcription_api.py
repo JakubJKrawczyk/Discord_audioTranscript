@@ -31,6 +31,8 @@ logger = logging.getLogger("whisper-api")
 whisper_model: Optional[Whisper] = None
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "https://ollama.jakubkrawczyk.com").rstrip("/")
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
+# Język transkrypcji. "pl" wymusza polski; "auto" = autodetekcja Whispera.
+WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE", "pl")
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", 8000))
 # Lista dozwolonych originów dla CORS (oddzielona przecinkami). Domyślnie "*".
@@ -113,6 +115,7 @@ class SummarizeResponse(BaseModel):
 async def transcribe_audio(
         file: UploadFile = File(...),
         model_type: str = Query("whisper", description="Tylko 'whisper' jest obsługiwane dla transkrypcji"),
+        language: str = Query(None, description="Kod języka (np. 'pl'); 'auto' = autodetekcja. Domyślnie z WHISPER_LANGUAGE."),
 ):
     """
     Transkrypcja pliku audio (WAV lub MP3) modelem Whisper.
@@ -143,8 +146,17 @@ async def transcribe_audio(
             temp_path = temp_file.name
             temp_file.write(content)
 
-        logger.info(f"Transkrypcja pliku: {file.filename} (Whisper {WHISPER_MODEL_SIZE})")
-        result = whisper_model.transcribe(temp_path)
+        # Ustal język: parametr zapytania > zmienna środowiskowa.
+        lang = (language or WHISPER_LANGUAGE or "auto").lower()
+        transcribe_kwargs = {}
+        if lang and lang != "auto":
+            transcribe_kwargs["language"] = lang
+
+        logger.info(
+            f"Transkrypcja pliku: {file.filename} "
+            f"(Whisper {WHISPER_MODEL_SIZE}, język: {lang})"
+        )
+        result = whisper_model.transcribe(temp_path, **transcribe_kwargs)
 
         return TranscriptionResponse(
             text=result.get("text", "").strip(),
