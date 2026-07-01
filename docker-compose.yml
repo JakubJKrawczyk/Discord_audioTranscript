@@ -23,6 +23,9 @@ services:
       - whisper-models:/models
     networks:
       - transcription-network
+    # Wystaw port na loopbacku hosta, żeby bot (w sieci hosta) mógł go osiągnąć.
+    ports:
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
       interval: 15s
@@ -51,14 +54,15 @@ services:
     env_file:
       - .env
     environment:
-      # Adres serwera transkrypcji wewnątrz sieci compose (stała infrastrukturalna).
-      - API_URL=http://whisper-api:8000
+      # whisper-api jest wystawiony na loopbacku hosta (bot używa sieci hosta).
+      - API_URL=http://127.0.0.1:8000
     volumes:
       # Audio (czyszczone po N dniach) i trwały magazyn transkrypcji/podsumowań.
       - ./recordings:/app/recordings
       - ./data:/app/data
-    networks:
-      - transcription-network
+    # Sieć hosta - wymagana do poprawnego ODBIORU głosu (UDP/RTP) z Discorda.
+    # Bez tego dockerowy NAT gubi zwrotny strumień RTP i nagrania są ~puste.
+    network_mode: host
     depends_on:
       whisper-api:
         condition: service_healthy
