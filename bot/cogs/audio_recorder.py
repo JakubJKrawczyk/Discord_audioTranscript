@@ -31,6 +31,7 @@ class AudioRecorder(commands.Cog):
         self.manual_only_users = None       # ograniczenie dla /record_user
         self._finalize_lock = asyncio.Lock()
         self._auto_started = False
+        self._auto_announced = False  # czy ogłoszono start bieżącej sesji auto
 
         ApiController.set_base_url(BotConfig.API_URL)
 
@@ -117,6 +118,10 @@ class AudioRecorder(commands.Cog):
         try:
             members = [m for m in self.current_channel.members if not m.bot]
             if self.sink.has_audio():
+                # Nowa sesja: ogłoś rozpoczęcie nagrywania na czacie kanału.
+                if not self._auto_announced:
+                    self._auto_announced = True
+                    await self._announce_start()
                 timeout = self.silence_timeout_min * 60
                 if not members:
                     await self.finalize(reason="kanał opustoszał", announce=True)
@@ -152,8 +157,17 @@ class AudioRecorder(commands.Cog):
         self.mode = "auto"
         self.home_channel_id = channel.id
         self.manual_only_users = None
+        self._auto_announced = False
         if not self.monitor_loop.is_running():
             self.monitor_loop.start()
+
+    async def _announce_start(self):
+        """Pisze na czacie kanału głosowego, że zaczęło się nagrywanie (tryb auto)."""
+        try:
+            if self.current_channel is not None:
+                await self.current_channel.send("🔴 Wykryłem głos — zaczynam nagrywanie.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Nie udało się wysłać powiadomienia o starcie: {e}")
 
     async def start_manual(self, channel, only_users=None):
         await self._connect(channel, gated=False)
@@ -214,6 +228,10 @@ class AudioRecorder(commands.Cog):
     def _resolve_send(self, send):
         if send is not None:
             return send
+        # Tryb auto: publikuj na czacie tekstowym kanału głosowego.
+        if self.current_channel is not None:
+            return self.current_channel.send
+        # Fallback: wskazany kanał tekstowy wyników.
         if self.result_channel_id:
             ch = self.bot.get_channel(self.result_channel_id)
             if ch is not None:
@@ -277,6 +295,8 @@ class AudioRecorder(commands.Cog):
                 await out(f"🎧 **{name or '(bez nazwy)'}**  ·  `{session['id']}`\n👥 {parts}")
                 if summary:
                     await self._send_chunks(out, summary, header="**Podsumowanie:**")
+            # Pozwól ogłosić start kolejnej sesji auto.
+            self._auto_announced = False
             return session
 
     # =======================================================================
