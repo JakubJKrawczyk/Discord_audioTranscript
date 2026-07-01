@@ -339,7 +339,9 @@ class AudioRecorder(commands.Cog):
         if self.sink is None or self.mode == "idle":
             return
         async with self._proc_lock:
-            items = self.sink.pop_completed(BotConfig.UTTERANCE_GAP_SEC)
+            items = self.sink.pop_completed(
+                BotConfig.UTTERANCE_GAP_SEC, BotConfig.MAX_UTTERANCE_SEC
+            )
             if items:
                 await self._process_items(items)
 

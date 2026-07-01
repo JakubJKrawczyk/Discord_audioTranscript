@@ -74,6 +74,11 @@ class BotConfig:
     # dostaje własny znacznik czasu (do chronologicznego transkryptu).
     UTTERANCE_GAP_SEC = float(os.environ.get("UTTERANCE_GAP_SEC", "1.5"))
 
+    # Twardy limit długości pojedynczej wypowiedzi (sekundy) - nawet bez przerwy
+    # bardzo długi monolog jest domykany i przetwarzany, by nie rósł w pamięci.
+    # 0 = wyłączone.
+    MAX_UTTERANCE_SEC = float(os.environ.get("MAX_UTTERANCE_SEC", "60"))
+
     # Maksymalny rozmiar pliku ZIP wysyłanego na Discord (MB).
     MAX_UPLOAD_MB = float(os.environ.get("MAX_UPLOAD_MB", "8"))
 

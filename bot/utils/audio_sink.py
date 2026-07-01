@@ -80,10 +80,15 @@ class PerUserPCMSink(voice_recv.AudioSink):
     def silent_for(self) -> float:
         return time.monotonic() - self.last_sound
 
-    def pop_completed(self, min_idle: float):
+    # Discord PCM: 48000 Hz * 2 kanały * 2 bajty = 192000 B/s.
+    _BYTES_PER_SEC = 192000
+
+    def pop_completed(self, min_idle: float, max_seconds: float = 0):
         """
-        Zwraca ZAKOŃCZONE wypowiedzi (bezczynne dłużej niż min_idle) i usuwa je
-        z pamięci. Aktywna (ostatnia, wciąż odbierana) wypowiedź zostaje.
+        Zwraca ZAKOŃCZONE wypowiedzi i usuwa je z pamięci. Wypowiedź jest
+        zakończona, gdy: nie jest ostatnią (aktywną), albo była bezczynna dłużej
+        niż min_idle, albo przekroczyła max_seconds (twardy limit długiego
+        monologu - domykamy chunk, mowa płynie dalej w nowej wypowiedzi).
         Element: {"uid", "display", "start", "pcm"(bytes)}.
         """
         now = time.monotonic()
@@ -95,7 +100,13 @@ class PerUserPCMSink(voice_recv.AudioSink):
                 for i, s in enumerate(segs):
                     is_last = (i == len(segs) - 1)
                     idle = now - s["last_mono"]
-                    if (not is_last) or idle > min_idle:
+                    dur = len(s["pcm"]) / self._BYTES_PER_SEC
+                    completed = (
+                        (not is_last)
+                        or idle > min_idle
+                        or (max_seconds and dur >= max_seconds)
+                    )
+                    if completed:
                         if s["pcm"]:
                             out.append({
                                 "uid": uid,
