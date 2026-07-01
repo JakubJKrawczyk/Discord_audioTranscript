@@ -3,6 +3,7 @@
 import time
 import audioop
 import datetime
+import threading
 from collections import defaultdict
 
 from discord.ext import voice_recv
@@ -10,22 +11,19 @@ from discord.ext import voice_recv
 
 class PerUserPCMSink(voice_recv.AudioSink):
     """
-    Zbiera PCM osobno dla każdego użytkownika, dzieląc na WYPOWIEDZI.
+    Zbiera PCM osobno dla każdego użytkownika, dzieląc na WYPOWIEDZI
+    (nowa wypowiedź po przerwie > ``utterance_gap`` s; każda ma znacznik czasu).
 
-    Wypowiedź = ciągły fragment mowy; nowa wypowiedź zaczyna się, gdy przerwa
-    od poprzedniej klatki przekroczy ``utterance_gap`` sekund. Każda wypowiedź
-    ma znacznik czasu (wall-clock) startu - pozwala zbudować chronologiczny
-    transkrypt wielu rozmówców.
-
-    Bramkowanie ciszy (``rms_threshold > 0``): klatki poniżej progu RMS są
-    odrzucane (tryb auto). Przy 0 zapisujemy wszystko (tryb ręczny), ale i tak
-    dzielimy na wypowiedzi po przerwach.
+    Bezpieczny wątkowo: ``write`` woła wątek odbioru, a ``pop_completed`` /
+    ``drain_all`` woła pętla asynchroniczna (przetwarzanie przyrostowe, aby nie
+    trzymać całej sesji w pamięci).
     """
 
     def __init__(self, rms_threshold: int = 0, utterance_gap: float = 1.5):
         super().__init__()
         self.rms_threshold = rms_threshold
         self.utterance_gap = utterance_gap
+        self._lock = threading.Lock()
         # uid -> lista wypowiedzi: {"start": datetime, "last_mono": float, "pcm": bytearray}
         self.utterances = defaultdict(list)
         self.users = {}          # uid -> display_name
@@ -57,47 +55,79 @@ class PerUserPCMSink(voice_recv.AudioSink):
 
             now = time.monotonic()
             uid = str(user.id)
-            self.users[uid] = getattr(user, "display_name", None) or uid
-            segs = self.utterances[uid]
-            if not segs or (now - segs[-1]["last_mono"]) > self.utterance_gap:
-                segs.append({
-                    "start": datetime.datetime.now(),
-                    "last_mono": now,
-                    "pcm": bytearray(),
-                })
-            seg = segs[-1]
-            seg["pcm"].extend(pcm)
-            seg["last_mono"] = now
-
-            self.last_sound = now
-            if self.started_at is None:
-                self.started_at = now
+            with self._lock:
+                self.users[uid] = getattr(user, "display_name", None) or uid
+                segs = self.utterances[uid]
+                if not segs or (now - segs[-1]["last_mono"]) > self.utterance_gap:
+                    segs.append({
+                        "start": datetime.datetime.now(),
+                        "last_mono": now,
+                        "pcm": bytearray(),
+                    })
+                seg = segs[-1]
+                seg["pcm"].extend(pcm)
+                seg["last_mono"] = now
+                self.last_sound = now
+                if self.started_at is None:
+                    self.started_at = now
         except Exception:
             pass
 
     def has_audio(self) -> bool:
-        return any(any(s["pcm"] for s in segs) for segs in self.utterances.values())
+        with self._lock:
+            return any(any(s["pcm"] for s in segs) for segs in self.utterances.values())
 
     def silent_for(self) -> float:
         return time.monotonic() - self.last_sound
 
-    def snapshot_and_reset(self):
+    def pop_completed(self, min_idle: float):
         """
-        Zwraca (users, utterances) i czyści sink.
-        users: {uid: display_name}
-        utterances: {uid: [ {start: datetime, pcm: bytes}, ... ]}
+        Zwraca ZAKOŃCZONE wypowiedzi (bezczynne dłużej niż min_idle) i usuwa je
+        z pamięci. Aktywna (ostatnia, wciąż odbierana) wypowiedź zostaje.
+        Element: {"uid", "display", "start", "pcm"(bytes)}.
         """
-        utts = {}
-        for uid, segs in self.utterances.items():
-            kept = [{"start": s["start"], "pcm": bytes(s["pcm"])} for s in segs if s["pcm"]]
-            if kept:
-                utts[uid] = kept
-        users = dict(self.users)
-        self.utterances = defaultdict(list)
-        self.users = {}
-        self.started_at = None
-        self.last_sound = time.monotonic()
-        return users, utts
+        now = time.monotonic()
+        out = []
+        with self._lock:
+            for uid in list(self.utterances.keys()):
+                segs = self.utterances[uid]
+                keep = []
+                for i, s in enumerate(segs):
+                    is_last = (i == len(segs) - 1)
+                    idle = now - s["last_mono"]
+                    if (not is_last) or idle > min_idle:
+                        if s["pcm"]:
+                            out.append({
+                                "uid": uid,
+                                "display": self.users.get(uid, uid),
+                                "start": s["start"],
+                                "pcm": bytes(s["pcm"]),
+                            })
+                    else:
+                        keep.append(s)
+                if keep:
+                    self.utterances[uid] = keep
+                else:
+                    del self.utterances[uid]
+        return out
+
+    def drain_all(self):
+        """Zwraca WSZYSTKIE pozostałe wypowiedzi i czyści sink (do finalizacji)."""
+        out = []
+        with self._lock:
+            for uid, segs in self.utterances.items():
+                for s in segs:
+                    if s["pcm"]:
+                        out.append({
+                            "uid": uid,
+                            "display": self.users.get(uid, uid),
+                            "start": s["start"],
+                            "pcm": bytes(s["pcm"]),
+                        })
+            self.utterances = defaultdict(list)
+            self.started_at = None
+            self.last_sound = time.monotonic()
+        return out
 
     def cleanup(self):
         pass

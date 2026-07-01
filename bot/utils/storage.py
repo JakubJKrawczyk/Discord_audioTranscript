@@ -292,13 +292,14 @@ class TranscriptionStore:
             if changed:
                 self._write_index(sessions)
 
-        for wav in glob.glob(os.path.join(self.recordings_dir, "*.wav")):
-            try:
-                if os.path.getmtime(wav) < cutoff:
-                    self._rm(wav)
-                    removed.append(wav)
-            except OSError:
-                pass
+        for pat in ("*.wav", "*.pcm"):
+            for f in glob.glob(os.path.join(self.recordings_dir, pat)):
+                try:
+                    if os.path.getmtime(f) < cutoff:
+                        self._rm(f)
+                        removed.append(f)
+                except OSError:
+                    pass
         return removed
 
     # ------------------------------------------------------ rozwiązywanie celów

@@ -29,9 +29,16 @@ class AudioRecorder(commands.Cog):
         self.sink = None
         self.guild = None
         self.manual_only_users = None       # ograniczenie dla /record_user
-        self._finalize_lock = asyncio.Lock()
+        self._proc_lock = asyncio.Lock()   # serializuje flush i finalize
         self._auto_started = False
         self._auto_announced = False  # czy ogłoszono start bieżącej sesji auto
+
+        # Przyrostowe przetwarzanie sesji (aby nie trzymać całości w pamięci):
+        self._flush_lines = []       # [(start_dt, display, text)]
+        self._flush_audio_raw = {}   # uid -> ścieżka pliku .pcm (surowe audio)
+        self._flush_display = {}      # uid -> display_name
+        self._session_ts = None       # znacznik do nazw plików
+        self._session_started_dt = None
 
         ApiController.set_base_url(BotConfig.API_URL)
 
@@ -76,6 +83,7 @@ class AudioRecorder(commands.Cog):
     def cog_unload(self):
         self.audio_cleanup_loop.cancel()
         self.monitor_loop.cancel()
+        self.flush_loop.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -117,7 +125,7 @@ class AudioRecorder(commands.Cog):
             return
         try:
             members = [m for m in self.current_channel.members if not m.bot]
-            if self.sink.has_audio():
+            if self._has_session_content():
                 # Nowa sesja: ogłoś rozpoczęcie nagrywania na czacie kanału.
                 if not self._auto_announced:
                     self._auto_announced = True
@@ -129,6 +137,21 @@ class AudioRecorder(commands.Cog):
                     await self.finalize(reason=f"cisza > {self.silence_timeout_min} min", announce=True)
         except Exception as e:  # noqa: BLE001
             print(f"[monitor] Błąd: {e}")
+
+    @tasks.loop(seconds=4)
+    async def flush_loop(self):
+        # Przyrostowe przetwarzanie zakończonych wypowiedzi (zwalnia pamięć).
+        if self.mode == "idle" or self.sink is None:
+            return
+        try:
+            await self._flush_pending()
+        except Exception as e:  # noqa: BLE001
+            print(f"[flush] Błąd: {e}")
+
+    def _has_session_content(self) -> bool:
+        if self._flush_lines or self._flush_audio_raw:
+            return True
+        return bool(self.sink and self.sink.has_audio())
 
     # =======================================================================
     #  Połączenie / tryby
@@ -152,14 +175,24 @@ class AudioRecorder(commands.Cog):
         self.current_channel = channel
         return vc, sink
 
+    def _reset_session_state(self):
+        self._flush_lines = []
+        self._flush_audio_raw = {}
+        self._flush_display = {}
+        self._session_ts = None
+        self._session_started_dt = None
+        self._auto_announced = False
+
     async def start_auto(self, channel):
         await self._connect(channel, gated=True)
         self.mode = "auto"
         self.home_channel_id = channel.id
         self.manual_only_users = None
-        self._auto_announced = False
+        self._reset_session_state()
         if not self.monitor_loop.is_running():
             self.monitor_loop.start()
+        if not self.flush_loop.is_running():
+            self.flush_loop.start()
 
     async def _announce_start(self):
         """Pisze na czacie kanału głosowego, że zaczęło się nagrywanie (tryb auto)."""
@@ -173,6 +206,9 @@ class AudioRecorder(commands.Cog):
         await self._connect(channel, gated=False)
         self.mode = "manual"
         self.manual_only_users = set(only_users) if only_users else None
+        self._reset_session_state()
+        if not self.flush_loop.is_running():
+            self.flush_loop.start()
 
     async def stop_manual(self, send):
         await self.finalize(send=send, reason="/stop", announce=True)
@@ -260,58 +296,110 @@ class AudioRecorder(commands.Cog):
             except OSError:
                 pass
 
+    @staticmethod
+    def _append_raw(path, pcm):
+        with open(path, "ab") as f:
+            f.write(pcm)
+
+    async def _process_items(self, items):
+        """
+        Przetwarza ZAKOŃCZONE wypowiedzi: dopisuje audio na dysk (surowe PCM),
+        transkrybuje i zapamiętuje linię z czasem. Zakłada trzymany _proc_lock.
+        """
+        for it in items:
+            uid = it["uid"]
+            if self.manual_only_users and uid not in self.manual_only_users:
+                continue
+            pcm = it["pcm"]
+            if not pcm:
+                continue
+            start = it["start"]
+            display = it["display"] or self._display_name(uid)
+
+            if self._session_ts is None:
+                self._session_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if self._session_started_dt is None or start < self._session_started_dt:
+                self._session_started_dt = start
+
+            raw = self._flush_audio_raw.get(uid)
+            if raw is None:
+                channel_name = self.current_channel.name if self.current_channel else "kanal"
+                safe = channel_name.replace(" ", "_")
+                raw = os.path.join(self.recordings_dir, f"{safe}_{uid}_{self._session_ts}.pcm")
+                self._flush_audio_raw[uid] = raw
+                self._flush_display[uid] = display
+
+            await asyncio.to_thread(self._append_raw, raw, pcm)  # audio -> dysk (zwalnia RAM)
+            text = await self._transcribe_pcm(pcm)
+            if text and text.strip() and not text.startswith("Błąd"):
+                self._flush_lines.append((start, display, text.strip()))
+
+    async def _flush_pending(self):
+        """Przetwarza zakończone wypowiedzi (wołane cyklicznie przez flush_loop)."""
+        if self.sink is None or self.mode == "idle":
+            return
+        async with self._proc_lock:
+            items = self.sink.pop_completed(BotConfig.UTTERANCE_GAP_SEC)
+            if items:
+                await self._process_items(items)
+
     async def finalize(self, send=None, reason="", announce=False):
-        async with self._finalize_lock:
-            sink = self.sink
-            if sink is None:
-                return None
-            users, utterances = sink.snapshot_and_reset()
-            if self.manual_only_users:
-                utterances = {u: v for u, v in utterances.items() if u in self.manual_only_users}
-            if not utterances:
+        async with self._proc_lock:
+            # Domknij wszystkie pozostałe (aktywne) wypowiedzi.
+            if self.sink is not None:
+                await self._process_items(self.sink.drain_all())
+
+            lines = self._flush_lines
+            audio_raw = self._flush_audio_raw
+            display_map = self._flush_display
+            started = self._session_started_dt
+            # Wyzeruj stan sesji pod następne nagranie.
+            self._flush_lines = []
+            self._flush_audio_raw = {}
+            self._flush_display = {}
+            self._session_ts = None
+            self._session_started_dt = None
+            self._auto_announced = False
+
+            if not lines and not audio_raw:
                 return None
 
             out = self._resolve_send(send)
             if out and announce:
                 await out(f"⏹️ Finalizuję nagranie ({reason})..." if reason else "⏹️ Finalizuję nagranie...")
 
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             channel_name = self.current_channel.name if self.current_channel else "?"
-            safe_channel = channel_name.replace(" ", "_")
 
+            # Surowe PCM -> WAV (audio per osoba do ZIP-a i retencji).
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             audio_files = {}
-            timeline = []          # (start_datetime, display, text)
-            first_start = None
-            for uid, segs in utterances.items():
-                display = users.get(uid) or self._display_name(uid)
-                all_pcm = b"".join(s["pcm"] for s in segs)
-                if not all_pcm:
+            for uid, raw in audio_raw.items():
+                try:
+                    with open(raw, "rb") as f:
+                        pcm = f.read()
+                except OSError:
+                    pcm = b""
+                if not pcm:
                     continue
-                # Audio per osoba (sklejone wypowiedzi) - do ZIP-a i retencji.
-                audio_path = os.path.join(self.recordings_dir, f"{safe_channel}_{uid}_{timestamp}.wav")
-                self._save_wav(all_pcm, audio_path)
-                audio_files[uid] = {"display_name": display, "audio_file": audio_path}
+                wav = os.path.join(self.recordings_dir, f"{channel_name.replace(' ', '_')}_{uid}_{ts}.wav")
+                self._save_wav(pcm, wav)
+                try:
+                    os.remove(raw)
+                except OSError:
+                    pass
+                audio_files[uid] = {
+                    "display_name": display_map.get(uid, self._display_name(uid)),
+                    "audio_file": wav,
+                }
 
-                if out:
-                    await out(f"⏳ Transkrybuję: **{display}** ({len(segs)} wypowiedzi)...")
-                for s in segs:
-                    if first_start is None or s["start"] < first_start:
-                        first_start = s["start"]
-                    text = await self._transcribe_pcm(s["pcm"])
-                    if text and text.strip() and not text.startswith("Błąd"):
-                        timeline.append((s["start"], display, text.strip()))
-
-            if not audio_files:
-                return None
-
-            timeline.sort(key=lambda x: x[0])
+            lines.sort(key=lambda x: x[0])
             transcript_text = "\n".join(
-                f"[{dt:%Y-%m-%d %H:%M:%S}] {disp}: {txt}" for dt, disp, txt in timeline
+                f"[{dt:%Y-%m-%d %H:%M:%S}] {disp}: {txt}" for dt, disp, txt in lines
             )
 
             session = await asyncio.to_thread(
                 self.store.add_session, channel_name, transcript_text, audio_files,
-                first_start or datetime.datetime.now(),
+                started or datetime.datetime.now(),
             )
 
             summary = None
@@ -324,11 +412,10 @@ class AudioRecorder(commands.Cog):
                     await asyncio.to_thread(self.store.set_name, session["id"], name)
 
             if out:
-                parts = ", ".join(a["display_name"] for a in audio_files.values())
+                parts = ", ".join(a["display_name"] for a in audio_files.values()) or "-"
                 await out(f"🎧 **{name or '(bez nazwy)'}**  ·  `{session['id']}`\n👥 {parts}")
                 if summary:
                     await self._send_chunks(out, summary, header="**Podsumowanie:**")
-            self._auto_announced = False
             return session
 
     # =======================================================================
