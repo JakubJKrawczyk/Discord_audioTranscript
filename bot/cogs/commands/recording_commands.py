@@ -214,6 +214,9 @@ class RecordingCommands:
             # Przechwyć bufory zanim rozłączymy klienta.
             sink = self.cog.sink
             buffers = dict(sink.buffers) if sink else {}
+            if sink:
+                sizes = {k: len(v) for k, v in sink.buffers.items()}
+                print(f"[sink] stats={sink.stats} bufory(bajty)={sizes}")
 
             vc = self.cog.voice_client
             if vc is not None:
