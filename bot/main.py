@@ -26,22 +26,6 @@ from cogs.audio_recorder import AudioRecorder
 from cogs.error_handlers import register_error_handlers
 
 
-def disable_dave():
-    """
-    Wyłącza DAVE (E2EE głosu Discorda). discord-ext-voice-recv nie potrafi
-    zdjąć szyfrowania DAVE przy ODBIORZE - Opus dostaje zaszyfrowane dane i
-    rzuca 'corrupted stream', a wątek odbioru pada po pierwszym pakiecie.
-    Ustawiając has_dave=False bot zgłasza max_dave_protocol_version=0, więc
-    Discord negocjuje połączenie bez E2EE (samo szyfrowanie transportowe).
-    """
-    try:
-        import discord.voice_state as _vs
-        _vs.has_dave = False
-        print("DAVE wyłączony (has_dave=False) - odbiór głosu bez E2EE.")
-    except Exception as e:  # noqa: BLE001
-        print(f"OSTRZEŻENIE: nie udało się wyłączyć DAVE: {e}")
-
-
 def ensure_opus():
     """
     Ładuje bibliotekę Opus. Bez niej discord-ext-voice-recv nie zdekoduje
@@ -70,9 +54,6 @@ def ensure_opus():
 
 
 async def main():
-    # Wyłącz DAVE (E2EE) - inaczej odbiór głosu nie działa z voice_recv
-    disable_dave()
-
     # Załaduj Opus (wymagany do odbioru/dekodowania głosu z Discorda)
     ensure_opus()
 
