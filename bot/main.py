@@ -57,6 +57,10 @@ async def main():
     # Załaduj Opus (wymagany do odbioru/dekodowania głosu z Discorda)
     ensure_opus()
 
+    # Wepnij odszyfrowanie DAVE (E2EE) do ścieżki odbioru voice_recv.
+    from utils.dave_patch import apply_dave_receive_patch
+    apply_dave_receive_patch()
+
     # Inicjalizacja bota
     bot = Bot()
 
