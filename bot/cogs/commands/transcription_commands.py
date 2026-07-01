@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import io
+import os
+import json
+import zipfile
 import asyncio
 import datetime
 from typing import Optional
 
 import discord
 from discord import app_commands
+
+import sys
+sys.path.append('../..')
+from config import BotConfig
+from utils.storage import _safe
 
 PAGE_SIZE = 5
 
@@ -95,9 +104,9 @@ class TranscriptionCommands:
     # --------------------------------------------------------------- rejestracja
     def register_commands(self):
         @self.bot.command(name="recordings")
-        async def recordings(ctx, page: int = 1):
-            """Lista nagrań (audio + transkrypcja + podsumowania)"""
-            await self._list(ctx.send, ctx.author.id, page)
+        async def recordings(ctx, target: str = None):
+            """Lista nagrań; z ID pobiera ZIP (audio+transkrypcja+podsumowanie)"""
+            await self._recordings(ctx.send, ctx.author.id, target)
 
         @self.bot.command(name="summarize")
         async def summarize(ctx, target: str = "all"):
@@ -115,11 +124,11 @@ class TranscriptionCommands:
             await self._delete(ctx.send, target, scope)
 
     def register_slash_commands(self):
-        @self.bot.tree.command(name="recordings", description="Lista nagrań (audio + transkrypcja + podsumowania)")
-        @app_commands.describe(page="Numer strony (opcjonalnie)")
-        async def recordings_slash(interaction: discord.Interaction, page: Optional[int] = 1):
+        @self.bot.tree.command(name="recordings", description="Lista nagrań; podaj ID aby pobrać ZIP")
+        @app_commands.describe(target="Puste = lista; numer strony; albo ID nagrania = ZIP")
+        async def recordings_slash(interaction: discord.Interaction, target: Optional[str] = None):
             await interaction.response.defer(ephemeral=False)
-            await self._list(interaction.followup.send, interaction.user.id, page or 1)
+            await self._recordings(interaction.followup.send, interaction.user.id, target)
 
         @self.bot.tree.command(name="summarize", description="Generuje podsumowanie: ID, all, indeks lub przedział")
         @app_commands.describe(target="ID nagrania, 'all', indeks (np. 2) lub przedział (np. 1-3)")
@@ -149,7 +158,18 @@ class TranscriptionCommands:
             await self._delete(interaction.followup.send, target, scope.value if scope else "all")
 
     # -------------------------------------------------------------------- logika
-    async def _list(self, send, author_id, page):
+    async def _recordings(self, send, author_id, target):
+        target = (target or "").strip()
+        # ID (np. T2026...) -> ZIP; puste/liczba -> lista
+        if target and not target.isdigit():
+            session = await asyncio.to_thread(self.store.get_by_id, target)
+            if session is None:
+                await send(f"Nie znaleziono nagrania o ID `{target}`.")
+                return
+            await self._send_zip(send, session)
+            return
+
+        page = int(target) if target.isdigit() else 1
         sessions = await asyncio.to_thread(self.store.list_sessions)
         if not sessions:
             await send("Brak zapisanych nagrań.")
@@ -157,6 +177,57 @@ class TranscriptionCommands:
         pages = build_pages(self.store, sessions)
         start = max(0, min(page - 1, len(pages) - 1))
         await send(embed=pages[start], view=Paginator(pages, author_id, start_index=start))
+
+    def _build_zip(self, session, bundle, include_audio=True):
+        buf = io.BytesIO()
+        omitted = False
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            info = {
+                "id": session.get("id"),
+                "name": session.get("name") or "",
+                "created_at": session.get("created_at"),
+                "channel": session.get("channel"),
+                "participants": session.get("participants", []),
+            }
+            z.writestr("info.json", json.dumps(info, ensure_ascii=False, indent=2))
+            z.writestr("transkrypcja.txt", bundle.get("transcript_text") or "(brak transkrypcji)")
+            for i, p in enumerate(bundle.get("summaries", []), 1):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        z.writestr(f"podsumowanie_{i}.txt", f.read())
+                except OSError:
+                    pass
+            if include_audio:
+                for display, path in bundle.get("audio", []):
+                    try:
+                        z.write(path, arcname=f"audio/{_safe(display)}_{os.path.basename(path)}")
+                    except OSError:
+                        pass
+            else:
+                omitted = bool(bundle.get("audio"))
+        buf.seek(0)
+        return buf, omitted
+
+    async def _send_zip(self, send, session):
+        bundle = await asyncio.to_thread(self.store.export_bundle, session)
+        limit = BotConfig.MAX_UPLOAD_MB
+
+        buf, omitted = await asyncio.to_thread(self._build_zip, session, bundle, True)
+        size_mb = buf.getbuffer().nbytes / (1024 * 1024)
+        if size_mb > limit:
+            # spróbuj bez audio
+            buf, omitted = await asyncio.to_thread(self._build_zip, session, bundle, False)
+            omitted = True
+            size_mb = buf.getbuffer().nbytes / (1024 * 1024)
+            if size_mb > limit:
+                await send(f"Paczka jest za duża ({size_mb:.1f} MB > {limit} MB).")
+                return
+
+        note = " (audio pominięte — za duże; dostępne na serwerze)" if omitted else ""
+        await send(
+            content=f"📦 Nagranie `{session['id']}`{note}",
+            file=discord.File(buf, filename=f"{session['id']}.zip"),
+        )
 
     async def _summarize(self, send, requester_id, target):
         targets = await asyncio.to_thread(self.store.resolve_targets, target)

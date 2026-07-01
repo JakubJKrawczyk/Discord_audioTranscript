@@ -20,7 +20,7 @@ HELP_SECTIONS = [
         ("/stop", "Kończy nagrywanie, przetwarza i wraca na kanał domowy."),
     ]),
     ("🎧 Nagrania", [
-        ("/recordings [strona]", "Lista nagrań: nazwa, audio, transkrypcja, podsumowania (◀ ▶)."),
+        ("/recordings [strona|ID]", "Lista nagrań; z ID pobiera ZIP (audio+transkrypcja+podsumowanie)."),
         ("/summarize <cel>", "Generuje podsumowanie. cel: ID • all • indeks `2` • przedział `1-3`."),
         ("/rename <cel> <nazwa>", "Zmienia nazwę nagrania."),
         ("/delete <cel> [zakres]", "Usuwa. zakres: `all` (całość) • `audio` • `summary`."),

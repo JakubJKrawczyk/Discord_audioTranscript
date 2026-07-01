@@ -144,7 +144,7 @@ class AudioRecorder(commands.Cog):
                 await vc.move_to(channel)
             if vc.is_listening():
                 vc.stop_listening()
-        sink = PerUserPCMSink(rms_threshold=threshold)
+        sink = PerUserPCMSink(rms_threshold=threshold, utterance_gap=BotConfig.UTTERANCE_GAP_SEC)
         vc.listen(sink)
         self.voice_client = vc
         self.sink = sink
@@ -246,15 +246,29 @@ class AudioRecorder(commands.Cog):
         for i in range(0, len(text), 1900):
             await send(text[i:i + 1900])
 
+    async def _transcribe_pcm(self, pcm) -> str:
+        """Transkrybuje pojedynczą wypowiedź (PCM) przez plik tymczasowy."""
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".wav", dir=self.recordings_dir)
+        os.close(fd)
+        try:
+            self._save_wav(bytes(pcm), path)
+            return await self.transcribe_audio(path)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     async def finalize(self, send=None, reason="", announce=False):
         async with self._finalize_lock:
             sink = self.sink
             if sink is None:
                 return None
-            buffers = sink.snapshot_and_reset()
+            users, utterances = sink.snapshot_and_reset()
             if self.manual_only_users:
-                buffers = {u: b for u, b in buffers.items() if u in self.manual_only_users}
-            if not buffers:
+                utterances = {u: v for u, v in utterances.items() if u in self.manual_only_users}
+            if not utterances:
                 return None
 
             out = self._resolve_send(send)
@@ -263,39 +277,57 @@ class AudioRecorder(commands.Cog):
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             channel_name = self.current_channel.name if self.current_channel else "?"
-            session_transcripts = {}
-            for uid, pcm in buffers.items():
-                display = self._display_name(uid)
-                filename = os.path.join(self.recordings_dir, f"{channel_name}_{uid}_{timestamp}.wav")
-                filename = filename.replace(" ", "_")
-                self._save_wav(pcm, filename)
-                if out:
-                    await out(f"⏳ Transkrybuję: **{display}**...")
-                text = await self.transcribe_audio(filename)
-                session_transcripts[uid] = {
-                    "display_name": display, "text": text, "audio_file": filename,
-                }
+            safe_channel = channel_name.replace(" ", "_")
 
-            session = await asyncio.to_thread(
-                self.store.add_session, channel_name, session_transcripts
+            audio_files = {}
+            timeline = []          # (start_datetime, display, text)
+            first_start = None
+            for uid, segs in utterances.items():
+                display = users.get(uid) or self._display_name(uid)
+                all_pcm = b"".join(s["pcm"] for s in segs)
+                if not all_pcm:
+                    continue
+                # Audio per osoba (sklejone wypowiedzi) - do ZIP-a i retencji.
+                audio_path = os.path.join(self.recordings_dir, f"{safe_channel}_{uid}_{timestamp}.wav")
+                self._save_wav(all_pcm, audio_path)
+                audio_files[uid] = {"display_name": display, "audio_file": audio_path}
+
+                if out:
+                    await out(f"⏳ Transkrybuję: **{display}** ({len(segs)} wypowiedzi)...")
+                for s in segs:
+                    if first_start is None or s["start"] < first_start:
+                        first_start = s["start"]
+                    text = await self._transcribe_pcm(s["pcm"])
+                    if text and text.strip() and not text.startswith("Błąd"):
+                        timeline.append((s["start"], display, text.strip()))
+
+            if not audio_files:
+                return None
+
+            timeline.sort(key=lambda x: x[0])
+            transcript_text = "\n".join(
+                f"[{dt:%Y-%m-%d %H:%M:%S}] {disp}: {txt}" for dt, disp, txt in timeline
             )
 
-            combined = await asyncio.to_thread(self.store.build_combined_text, session)
+            session = await asyncio.to_thread(
+                self.store.add_session, channel_name, transcript_text, audio_files,
+                first_start or datetime.datetime.now(),
+            )
+
             summary = None
             name = ""
-            if combined.strip():
-                summary = await self.summarize_with_ollama(combined)
+            if transcript_text.strip():
+                summary = await self.summarize_with_ollama(transcript_text)
                 await asyncio.to_thread(self.store.add_summary, session["id"], "auto", summary)
-                name = await self.generate_title(summary or combined)
+                name = await self.generate_title(summary or transcript_text)
                 if name:
                     await asyncio.to_thread(self.store.set_name, session["id"], name)
 
             if out:
-                parts = ", ".join(d["display_name"] for d in session_transcripts.values())
+                parts = ", ".join(a["display_name"] for a in audio_files.values())
                 await out(f"🎧 **{name or '(bez nazwy)'}**  ·  `{session['id']}`\n👥 {parts}")
                 if summary:
                     await self._send_chunks(out, summary, header="**Podsumowanie:**")
-            # Pozwól ogłosić start kolejnej sesji auto.
             self._auto_announced = False
             return session
 

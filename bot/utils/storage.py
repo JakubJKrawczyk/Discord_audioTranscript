@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Trwały magazyn transkrypcji i podsumowań.
+Trwały magazyn nagrań.
 
-Układ katalogów (DATA_DIR):
-    index.json            - metadane wszystkich sesji
-    transcripts/          - tekst każdej transkrypcji (1 plik na uczestnika)
-    summaries/            - tekst każdego podsumowania (1 plik)
-Audio (pliki WAV) trzymane jest w RECORDINGS_DIR i czyszczone po N dniach;
-transkrypcje i podsumowania są trzymane bezterminowo.
+Model sesji (nagrania):
+    id, name, created_at, channel, participants,
+    transcript_file  -> transcripts/<id>.txt  (CHRONOLOGICZNY, wielu mówców)
+    transcript_len
+    audio: [{user_id, display_name, file}]     (audio per osoba, w RECORDINGS_DIR)
+    summaries: [{file, label, created_at}]
 
-Wszystkie operacje są synchroniczne (I/O na plikach) i bezpieczne wątkowo;
-z kodu async wołaj je przez asyncio.to_thread.
+Audio kasowane po N dniach; transkrypcje i podsumowania - bezterminowo.
+Czyta też stary format (per-user "transcripts") dla zgodności wstecznej.
 """
 import os
 import re
@@ -23,7 +23,6 @@ import threading
 
 
 def _safe(name: str, limit: int = 40) -> str:
-    """Bezpieczny fragment nazwy pliku."""
     cleaned = re.sub(r'[^0-9A-Za-z_-]+', '_', str(name)).strip('_')
     return (cleaned or "x")[:limit]
 
@@ -60,7 +59,6 @@ class TranscriptionStore:
 
     @staticmethod
     def _sorted(sessions):
-        """Sortuje sesje od najnowszej do najstarszej."""
         return sorted(sessions, key=lambda s: s.get("created_at", ""), reverse=True)
 
     def _abs(self, rel):
@@ -74,9 +72,56 @@ class TranscriptionStore:
         except OSError:
             pass
 
+    # -------------------------------------------------------- format-agnostic
+    def _audio_entries(self, session):
+        """Lista {user_id, display_name, file} niezależnie od formatu sesji."""
+        if "audio" in session:
+            return session.get("audio", [])
+        # stary format: transcripts[uid].audio_file
+        out = []
+        for uid, t in session.get("transcripts", {}).items():
+            out.append({
+                "user_id": uid,
+                "display_name": t.get("display_name", uid),
+                "file": t.get("audio_file"),
+            })
+        return out
+
+    def read_transcript(self, session):
+        """Zwraca treść transkryptu (nowy chronologiczny lub sklejony stary)."""
+        tf = session.get("transcript_file")
+        if tf:
+            try:
+                with open(self._abs(tf), "r", encoding="utf-8") as f:
+                    return f.read()
+            except OSError:
+                return ""
+        # stary format
+        parts = []
+        for uid, t in session.get("transcripts", {}).items():
+            p = self._abs(t.get("text_file"))
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    txt = f.read()
+            except OSError:
+                txt = ""
+            if txt.strip():
+                parts.append(f"[{t.get('display_name', uid)}]: {txt}")
+        return "\n\n".join(parts)
+
+    def build_combined_text(self, session):
+        return self.read_transcript(session)
+
+    def has_transcript(self, session) -> bool:
+        if "transcript_len" in session:
+            return (session.get("transcript_len") or 0) > 0
+        return any((t.get("length") or 0) > 0 for t in session.get("transcripts", {}).values())
+
+    def has_audio(self, session) -> bool:
+        return any(e.get("file") and os.path.exists(e["file"]) for e in self._audio_entries(session))
+
     # -------------------------------------------------------------- public API
     def list_sessions(self):
-        """Zwraca sesje posortowane od najnowszej do najstarszej."""
         with self._lock:
             return self._sorted(self._read_index())
 
@@ -87,11 +132,10 @@ class TranscriptionStore:
                     return s
         return None
 
-    def add_session(self, channel_name, transcripts, created_at=None, name=""):
+    def add_session(self, channel_name, transcript_text, audio_files, created_at=None, name=""):
         """
-        transcripts: dict[user_id_str -> {display_name, text, audio_file}]
-        name: opcjonalna nazwa nagrania (np. wygenerowana przez summarizer).
-        Zwraca utworzoną sesję (z nadanym ID).
+        transcript_text: gotowy CHRONOLOGICZNY transkrypt (wielu mówców).
+        audio_files: dict[uid -> {"display_name", "audio_file" (ścieżka abs)}]
         """
         with self._lock:
             sessions = self._read_index()
@@ -104,24 +148,19 @@ class TranscriptionStore:
                 session_id = base_id + chr(suffix)
                 suffix += 1
 
-            participants = []
-            entries = {}
-            for uid, data in transcripts.items():
-                display = data.get("display_name") or f"Użytkownik-{uid}"
-                text = data.get("text") or ""
-                tfile = os.path.join(
-                    self.transcripts_dir, f"{session_id}__{uid}__{_safe(display)}.txt"
-                )
-                with open(tfile, "w", encoding="utf-8") as f:
-                    f.write(text)
+            tfile = os.path.join(self.transcripts_dir, f"{session_id}.txt")
+            with open(tfile, "w", encoding="utf-8") as f:
+                f.write(transcript_text or "")
 
+            participants, audio = [], []
+            for uid, data in (audio_files or {}).items():
+                display = data.get("display_name") or f"Użytkownik-{uid}"
                 participants.append({"user_id": uid, "display_name": display})
-                entries[uid] = {
+                audio.append({
+                    "user_id": uid,
                     "display_name": display,
-                    "text_file": os.path.relpath(tfile, self.base_dir),
-                    "audio_file": data.get("audio_file"),
-                    "length": len(text),
-                }
+                    "file": data.get("audio_file"),
+                })
 
             session = {
                 "id": session_id,
@@ -129,7 +168,9 @@ class TranscriptionStore:
                 "created_at": created.isoformat(timespec="seconds"),
                 "channel": channel_name,
                 "participants": participants,
-                "transcripts": entries,
+                "transcript_file": os.path.relpath(tfile, self.base_dir),
+                "transcript_len": len(transcript_text or ""),
+                "audio": audio,
                 "summaries": [],
             }
             sessions.append(session)
@@ -137,7 +178,6 @@ class TranscriptionStore:
             return session
 
     def set_name(self, session_id, name):
-        """Ustawia nazwę nagrania dla sesji."""
         with self._lock:
             sessions = self._read_index()
             target = next((s for s in sessions if s["id"] == session_id), None)
@@ -147,36 +187,14 @@ class TranscriptionStore:
             self._write_index(sessions)
             return True
 
-    def read_transcript_text(self, session, user_id):
-        t = session.get("transcripts", {}).get(user_id)
-        if not t:
-            return ""
-        try:
-            with open(self._abs(t["text_file"]), "r", encoding="utf-8") as f:
-                return f.read()
-        except OSError:
-            return ""
-
-    def build_combined_text(self, session):
-        """Łączy transkrypcje wszystkich uczestników w jeden tekst rozmowy."""
-        parts = []
-        for uid, t in session.get("transcripts", {}).items():
-            text = self.read_transcript_text(session, uid)
-            if text.strip():
-                parts.append(f"[{t['display_name']}]: {text}")
-        return "\n\n".join(parts)
-
     def add_summary(self, session_id, label, text):
-        """Zapisuje podsumowanie do pliku i dopisuje je do sesji."""
         with self._lock:
             sessions = self._read_index()
             target = next((s for s in sessions if s["id"] == session_id), None)
             if target is None:
                 return None
             ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            sfile = os.path.join(
-                self.summaries_dir, f"{session_id}__{_safe(label)}__{ts}.txt"
-            )
+            sfile = os.path.join(self.summaries_dir, f"{session_id}__{_safe(label)}__{ts}.txt")
             with open(sfile, "w", encoding="utf-8") as f:
                 f.write(text)
             target.setdefault("summaries", []).append({
@@ -188,15 +206,19 @@ class TranscriptionStore:
             return sfile
 
     def delete_session(self, session_id: str) -> bool:
-        """Usuwa sesję wraz z plikami transkrypcji, podsumowań i audio."""
         with self._lock:
             sessions = self._read_index()
             target = next((s for s in sessions if s["id"].lower() == session_id.lower()), None)
             if target is None:
                 return False
+            # transkrypt (nowy i stary)
+            self._rm(self._abs(target.get("transcript_file")))
             for t in target.get("transcripts", {}).values():
                 self._rm(self._abs(t.get("text_file")))
-                self._rm(t.get("audio_file"))
+            # audio
+            for e in self._audio_entries(target):
+                self._rm(e.get("file"))
+            # podsumowania
             for sm in target.get("summaries", []):
                 self._rm(self._abs(sm.get("file")))
             sessions = [s for s in sessions if s["id"] != target["id"]]
@@ -204,21 +226,21 @@ class TranscriptionStore:
             return True
 
     def delete_audio(self, session_id: str) -> bool:
-        """Usuwa TYLKO pliki audio nagrania (transkrypcja i podsumowania zostają)."""
         with self._lock:
             sessions = self._read_index()
             target = next((s for s in sessions if s["id"].lower() == session_id.lower()), None)
             if target is None:
                 return False
-            for t in target.get("transcripts", {}).values():
+            for e in target.get("audio", []):
+                self._rm(e.get("file"))
+                e["file"] = None
+            for t in target.get("transcripts", {}).values():  # stary format
                 self._rm(t.get("audio_file"))
                 t["audio_file"] = None
-                t["audio_expired"] = True
             self._write_index(sessions)
             return True
 
     def delete_summaries(self, session_id: str) -> bool:
-        """Usuwa TYLKO podsumowania nagrania (audio i transkrypcja zostają)."""
         with self._lock:
             sessions = self._read_index()
             target = next((s for s in sessions if s["id"].lower() == session_id.lower()), None)
@@ -230,40 +252,46 @@ class TranscriptionStore:
             self._write_index(sessions)
             return True
 
-    @staticmethod
-    def has_transcript(session) -> bool:
-        return any((t.get("length") or 0) > 0 for t in session.get("transcripts", {}).values())
-
-    @staticmethod
-    def has_audio(session) -> bool:
-        return any(t.get("audio_file") for t in session.get("transcripts", {}).values())
+    def export_bundle(self, session):
+        """Zwraca elementy nagrania do spakowania: transkrypt, podsumowania, audio."""
+        summaries = []
+        for sm in session.get("summaries", []):
+            p = self._abs(sm.get("file"))
+            if p and os.path.exists(p):
+                summaries.append(p)
+        audio = []
+        for e in self._audio_entries(session):
+            f = e.get("file")
+            if f and os.path.exists(f):
+                audio.append((e.get("display_name", e.get("user_id")), f))
+        return {
+            "transcript_text": self.read_transcript(session),
+            "summaries": summaries,
+            "audio": audio,
+        }
 
     def prune_audio(self):
-        """Usuwa pliki audio starsze niż retention; transkrypcje zostają."""
         cutoff = time.time() - self.audio_retention_days * 86400
         removed = []
         with self._lock:
             sessions = self._read_index()
             changed = False
             for s in sessions:
-                for t in s.get("transcripts", {}).values():
-                    af = t.get("audio_file")
-                    if not af:
+                for e in self._audio_entries(s):
+                    f = e.get("file")
+                    if not f:
                         continue
-                    if not os.path.exists(af):
-                        t["audio_file"] = None
-                        t["audio_expired"] = True
+                    if not os.path.exists(f):
+                        e["file"] = None
                         changed = True
-                    elif os.path.getmtime(af) < cutoff:
-                        self._rm(af)
-                        t["audio_file"] = None
-                        t["audio_expired"] = True
+                    elif os.path.getmtime(f) < cutoff:
+                        self._rm(f)
+                        e["file"] = None
                         changed = True
-                        removed.append(af)
+                        removed.append(f)
             if changed:
                 self._write_index(sessions)
 
-        # Posprzątaj też osierocone pliki WAV w katalogu nagrań.
         for wav in glob.glob(os.path.join(self.recordings_dir, "*.wav")):
             try:
                 if os.path.getmtime(wav) < cutoff:
@@ -275,20 +303,12 @@ class TranscriptionStore:
 
     # ------------------------------------------------------ rozwiązywanie celów
     def resolve_targets(self, arg: str):
-        """
-        Zamienia argument komendy na listę sesji (posortowanych od najnowszej):
-          - 'all'           -> wszystkie
-          - '<id>'          -> jedna sesja po ID (np. T20260630213045)
-          - '<n>'           -> n-ta pozycja listy (1 = najnowsza)
-          - '<start>-<end>' -> przedział indeksów listy (włącznie)
-        """
         sessions = self.list_sessions()
         a = (arg or "").strip()
         if not a:
             return []
         if a.lower() == "all":
             return sessions
-
         m = re.match(r'^(\d+)\s*-\s*(\d+)$', a)
         if m:
             start, end = int(m.group(1)), int(m.group(2))
@@ -296,12 +316,10 @@ class TranscriptionStore:
                 start, end = end, start
             start = max(start, 1)
             return sessions[start - 1:end]
-
         if a.isdigit():
             idx = int(a)
             if 1 <= idx <= len(sessions):
                 return [sessions[idx - 1]]
             return []
-
         s = next((x for x in sessions if x["id"].lower() == a.lower()), None)
         return [s] if s else []

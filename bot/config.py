@@ -70,6 +70,13 @@ class BotConfig:
     # Co ile sekund pętla monitorująca sprawdza ciszę/obecność.
     AUTO_CHECK_INTERVAL_SEC = float(os.environ.get("AUTO_CHECK_INTERVAL_SEC", "15"))
 
+    # Przerwa (sekundy) rozdzielająca wypowiedzi jednej osoby - nowa wypowiedź
+    # dostaje własny znacznik czasu (do chronologicznego transkryptu).
+    UTTERANCE_GAP_SEC = float(os.environ.get("UTTERANCE_GAP_SEC", "1.5"))
+
+    # Maksymalny rozmiar pliku ZIP wysyłanego na Discord (MB).
+    MAX_UPLOAD_MB = float(os.environ.get("MAX_UPLOAD_MB", "8"))
+
     @classmethod
     def require_token(cls) -> str:
         """Zwraca token bota albo zgłasza czytelny błąd, jeśli go brakuje."""
