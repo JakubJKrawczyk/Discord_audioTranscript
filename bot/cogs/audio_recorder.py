@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
+import json
 import wave
 import asyncio
 import datetime
@@ -34,7 +35,13 @@ class AudioRecorder(commands.Cog):
         ApiController.set_base_url(BotConfig.API_URL)
 
         self.user_contexts = {}
+
+        # --- Ustawienia edytowalne w locie przez /config -------------------
         self.ollama_model = BotConfig.OLLAMA_DEFAULT_MODEL
+        self.silence_timeout_min = BotConfig.SILENCE_TIMEOUT_MIN
+        self.silence_rms_threshold = BotConfig.SILENCE_RMS_THRESHOLD
+        self.result_channel_id = BotConfig.RESULT_CHANNEL_ID
+        self.audio_retention_days = BotConfig.AUDIO_RETENTION_DAYS
 
         self.recordings_dir = BotConfig.RECORDINGS_DIR
         os.makedirs(self.recordings_dir, exist_ok=True)
@@ -43,9 +50,11 @@ class AudioRecorder(commands.Cog):
         self.store = TranscriptionStore(
             base_dir=BotConfig.DATA_DIR,
             recordings_dir=self.recordings_dir,
-            audio_retention_days=BotConfig.AUDIO_RETENTION_DAYS,
+            audio_retention_days=self.audio_retention_days,
         )
-        print(f"Magazyn danych: {BotConfig.DATA_DIR} (audio: {BotConfig.AUDIO_RETENTION_DAYS} dni)")
+        # Wczytaj zapisane nadpisania ustawień (jeśli są).
+        self._load_runtime_config()
+        print(f"Magazyn danych: {BotConfig.DATA_DIR} (audio: {self.audio_retention_days} dni)")
 
         self.check_services()
         register_all_commands(self)
@@ -108,11 +117,11 @@ class AudioRecorder(commands.Cog):
         try:
             members = [m for m in self.current_channel.members if not m.bot]
             if self.sink.has_audio():
-                timeout = BotConfig.SILENCE_TIMEOUT_MIN * 60
+                timeout = self.silence_timeout_min * 60
                 if not members:
                     await self.finalize(reason="kanał opustoszał", announce=True)
                 elif self.sink.silent_for() >= timeout:
-                    await self.finalize(reason=f"cisza > {BotConfig.SILENCE_TIMEOUT_MIN} min", announce=True)
+                    await self.finalize(reason=f"cisza > {self.silence_timeout_min} min", announce=True)
         except Exception as e:  # noqa: BLE001
             print(f"[monitor] Błąd: {e}")
 
@@ -120,7 +129,7 @@ class AudioRecorder(commands.Cog):
     #  Połączenie / tryby
     # =======================================================================
     async def _connect(self, channel, gated: bool):
-        threshold = BotConfig.SILENCE_RMS_THRESHOLD if gated else 0
+        threshold = self.silence_rms_threshold if gated else 0
         guild = channel.guild
         vc = guild.voice_client
         if vc is None:
@@ -205,8 +214,8 @@ class AudioRecorder(commands.Cog):
     def _resolve_send(self, send):
         if send is not None:
             return send
-        if BotConfig.RESULT_CHANNEL_ID:
-            ch = self.bot.get_channel(BotConfig.RESULT_CHANNEL_ID)
+        if self.result_channel_id:
+            ch = self.bot.get_channel(self.result_channel_id)
             if ch is not None:
                 return ch.send
         return None
@@ -363,5 +372,82 @@ class AudioRecorder(commands.Cog):
         await asyncio.to_thread(self.store.add_summary, session["id"], label, summary)
         return summary
 
+    # =======================================================================
+    #  Konfiguracja w locie (/config)
+    # =======================================================================
+    CONFIG_KEYS = (
+        "ollama_model",
+        "silence_timeout_min",
+        "silence_rms_threshold",
+        "result_channel_id",
+        "home_channel_id",
+        "audio_retention_days",
+    )
+
+    def _config_path(self):
+        return os.path.join(BotConfig.DATA_DIR, "runtime_config.json")
+
+    def _load_runtime_config(self):
+        try:
+            with open(self._config_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        for k in self.CONFIG_KEYS:
+            if k in data:
+                setattr(self, k, data[k])
+        self.store.audio_retention_days = self.audio_retention_days
+        print("Wczytano nadpisania ustawień z runtime_config.json")
+
+    def _save_runtime_config(self):
+        data = {k: getattr(self, k, None) for k in self.CONFIG_KEYS}
+        try:
+            os.makedirs(BotConfig.DATA_DIR, exist_ok=True)
+            tmp = self._config_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self._config_path())
+        except Exception as e:  # noqa: BLE001
+            print(f"Nie udało się zapisać runtime_config: {e}")
+
+    def get_config(self):
+        return {k: getattr(self, k, None) for k in self.CONFIG_KEYS}
+
+    def set_config(self, key, value):
+        key = (key or "").strip().lower()
+        raw = (value if value is not None else "").strip()
+        try:
+            if key == "ollama_model":
+                if not raw:
+                    return False, "Podaj nazwę modelu."
+                self.ollama_model = raw
+            elif key == "silence_timeout_min":
+                v = float(raw)
+                if v <= 0:
+                    return False, "silence_timeout_min musi być > 0."
+                self.silence_timeout_min = v
+            elif key == "silence_rms_threshold":
+                v = int(raw)
+                if v < 0:
+                    return False, "silence_rms_threshold musi być >= 0."
+                self.silence_rms_threshold = v
+                if self.sink is not None and self.mode == "auto":
+                    self.sink.rms_threshold = v
+            elif key in ("result_channel_id", "home_channel_id"):
+                v = None if raw.lower() in ("none", "0", "null", "") else int(raw)
+                setattr(self, key, v)
+            elif key == "audio_retention_days":
+                v = int(raw)
+                if v < 0:
+                    return False, "audio_retention_days musi być >= 0."
+                self.audio_retention_days = v
+                self.store.audio_retention_days = v
+            else:
+                return False, f"Nieznany klucz: {key}. Dostępne: {', '.join(self.CONFIG_KEYS)}"
+        except ValueError:
+            return False, f"Nieprawidłowa wartość dla {key}: {raw}"
+        self._save_runtime_config()
+        return True, f"{key} = {getattr(self, key)}"
+
     # Komendy w: cogs/commands/recording_commands.py, utility_commands.py,
-    #            transcription_commands.py
+    #            transcription_commands.py, config_commands.py

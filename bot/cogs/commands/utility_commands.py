@@ -29,6 +29,10 @@ HELP_SECTIONS = [
         ("/change_model <model>", "Zmienia model używany do podsumowań."),
         ("/list_models", "Pokazuje modele dostępne w Ollamie."),
     ]),
+    ("⚙️ Konfiguracja", [
+        ("/config <hasło> show", "Pokazuje ustawienia (odpowiedź prywatna)."),
+        ("/config <hasło> set <klucz> <wartość>", "Zmienia ustawienie w locie (np. silence_timeout_min, silence_rms_threshold, ollama_model)."),
+    ]),
     ("🛠️ Pozostałe", [
         ("/context <tekst>", "Ustawia Twój kontekst (poprawia jakość podsumowań)."),
         ("/show_context", "Pokazuje Twój aktualny kontekst."),

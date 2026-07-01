@@ -13,6 +13,9 @@ class BotConfig:
     # Konfiguracja podstawowa
     DEFAULT_PREFIX = os.environ.get("BOT_PREFIX", "!")
 
+    # Hasło do komendy /config (zmiana ustawień w locie). Puste = /config wyłączone.
+    CONFIG_PASSWORD = os.environ.get("CONFIG_PASSWORD", "")
+
     # UWAGA: token NIE jest już trzymany w kodzie. Pochodzi wyłącznie ze
     # zmiennej środowiskowej DISCORD_TOKEN (np. z pliku .env). Stary token
     # wpisany na sztywno został skompromitowany i należy go unieważnić.
