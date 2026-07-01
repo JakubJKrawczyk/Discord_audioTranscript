@@ -41,8 +41,9 @@ def build_pages(sessions):
             names = ", ".join(p["display_name"] for p in s.get("participants", [])) or "-"
             has_audio = any(t.get("audio_file") for t in s.get("transcripts", {}).values())
             summaries = len(s.get("summaries", []))
+            title = s.get("name") or "(bez nazwy)"
             embed.add_field(
-                name=f"#{i} · {s['id']}",
+                name=f"#{i} · {title}  ·  {s['id']}",
                 value=(
                     f"🕑 {_fmt_date(s.get('created_at'))}\n"
                     f"👥 {names}\n"

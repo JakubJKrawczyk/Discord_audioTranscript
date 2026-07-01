@@ -13,12 +13,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
-logging.getLogger("discord.gateway").setLevel(logging.INFO)
-try:
-    logging.getLogger("discord.ext.voice_recv").setLevel(logging.DEBUG)
-except Exception:
-    pass
+logging.getLogger("discord.voice_client").setLevel(logging.INFO)
+logging.getLogger("discord.gateway").setLevel(logging.WARNING)
+logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
 
 from config import BotConfig
 from bot import Bot

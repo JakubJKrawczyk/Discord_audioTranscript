@@ -104,6 +104,8 @@ class SummarizeRequest(BaseModel):
     temperature: Optional[float] = 0.0
     context: Optional[str] = None
     additional_params: Optional[Dict[str, Any]] = None
+    # "summary" (domyślnie) albo "title" - krótki tytuł rozmowy.
+    task: Optional[str] = "summary"
 
 
 class SummarizeResponse(BaseModel):
@@ -187,18 +189,31 @@ async def summarize_text(request: SummarizeRequest = Body(...)):
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Pole 'text' nie może być puste")
 
-    system_prompt = request.system_prompt or (
-        "Jesteś ekspertem w podsumowywaniu rozmów. Tworzysz zwięzłe, "
-        "ale kompletne podsumowania transkrypcji w języku polskim."
-    )
-
-    user_prompt = ""
-    if request.context:
-        user_prompt += f"Kontekst rozmowy: {request.context}\n\n"
-    user_prompt += (
-        "Poniżej znajduje się transkrypcja rozmowy. Przygotuj zwięzłe "
-        f"podsumowanie:\n\n{request.text}\n\nPodsumowanie:"
-    )
+    if (request.task or "summary").lower() == "title":
+        system_prompt = request.system_prompt or (
+            "Jesteś generatorem krótkich tytułów rozmów w języku polskim. "
+            "Zwracasz WYŁĄCZNIE tytuł: maksymalnie 6 słów, bez cudzysłowów, "
+            "bez kropki na końcu."
+        )
+        user_prompt = ""
+        if request.context:
+            user_prompt += f"Kontekst: {request.context}\n\n"
+        user_prompt += (
+            "Nadaj krótki, konkretny tytuł poniższej rozmowie. Zwróć tylko tytuł.\n\n"
+            f"{request.text}\n\nTytuł:"
+        )
+    else:
+        system_prompt = request.system_prompt or (
+            "Jesteś ekspertem w podsumowywaniu rozmów. Tworzysz zwięzłe, "
+            "ale kompletne podsumowania transkrypcji w języku polskim."
+        )
+        user_prompt = ""
+        if request.context:
+            user_prompt += f"Kontekst rozmowy: {request.context}\n\n"
+        user_prompt += (
+            "Poniżej znajduje się transkrypcja rozmowy. Przygotuj zwięzłe "
+            f"podsumowanie:\n\n{request.text}\n\nPodsumowanie:"
+        )
 
     payload: Dict[str, Any] = {
         "model": request.model_name,

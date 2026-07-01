@@ -87,9 +87,10 @@ class TranscriptionStore:
                     return s
         return None
 
-    def add_session(self, channel_name, transcripts, created_at=None):
+    def add_session(self, channel_name, transcripts, created_at=None, name=""):
         """
         transcripts: dict[user_id_str -> {display_name, text, audio_file}]
+        name: opcjonalna nazwa nagrania (np. wygenerowana przez summarizer).
         Zwraca utworzoną sesję (z nadanym ID).
         """
         with self._lock:
@@ -124,6 +125,7 @@ class TranscriptionStore:
 
             session = {
                 "id": session_id,
+                "name": name or "",
                 "created_at": created.isoformat(timespec="seconds"),
                 "channel": channel_name,
                 "participants": participants,
@@ -133,6 +135,17 @@ class TranscriptionStore:
             sessions.append(session)
             self._write_index(sessions)
             return session
+
+    def set_name(self, session_id, name):
+        """Ustawia nazwę nagrania dla sesji."""
+        with self._lock:
+            sessions = self._read_index()
+            target = next((s for s in sessions if s["id"] == session_id), None)
+            if target is None:
+                return False
+            target["name"] = name or ""
+            self._write_index(sessions)
+            return True
 
     def read_transcript_text(self, session, user_id):
         t = session.get("transcripts", {}).get(user_id)

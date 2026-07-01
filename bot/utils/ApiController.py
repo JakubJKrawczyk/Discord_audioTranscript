@@ -93,10 +93,14 @@ class ApiController:
             system_prompt: Optional[str] = None,
             temperature: float = 0.0,
             context: Optional[str] = None,
+            task: str = "summary",
     ) -> Dict[str, Any]:
         """
         Summarize (or otherwise process) text with an Ollama model via the
         API's text endpoint. This is a pure text-in/text-out call - no audio.
+
+        Args:
+            task: "summary" (default) or "title" (short conversation title).
 
         Returns:
             Dict containing the result (``text`` key).
@@ -110,6 +114,7 @@ class ApiController:
             "text": text,
             "model_name": model_name,
             "temperature": temperature,
+            "task": task,
         }
         if system_prompt:
             payload["system_prompt"] = system_prompt

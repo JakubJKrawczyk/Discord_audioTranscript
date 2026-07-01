@@ -13,9 +13,11 @@ from utils.ApiController import ApiController
 # Struktura pomocy: (kategoria, [(składnia, opis), ...])
 HELP_SECTIONS = [
     ("🎙️ Nagrywanie", [
-        ("/record_user [użytkownik] [nazwa]", "Nagrywa jednego użytkownika (domyślnie Ciebie)."),
-        ("/record_all [prefix]", "Nagrywa wszystkich na Twoim kanale głosowym."),
-        ("/stop", "Kończy nagrywanie → transkrypcja + podsumowanie (nadaje ID)."),
+        ("/auto [kanał]", "Wprowadza bota na kanał (stały nasłuch, auto-nagrywanie)."),
+        ("/leave", "Wyłącza bota z kanału (kończy tryb auto)."),
+        ("/record_user [użytkownik]", "Przechodzi na Twój kanał i nagrywa tę osobę."),
+        ("/record_all", "Przechodzi na Twój kanał i nagrywa wszystkich."),
+        ("/stop", "Kończy nagrywanie, przetwarza i wraca na kanał domowy."),
     ]),
     ("📜 Transkrypcje", [
         ("/transcriptions [strona]", "Lista transkrypcji od najnowszej (paginacja ◀ ▶)."),

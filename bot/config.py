@@ -46,6 +46,22 @@ class BotConfig:
     AUDIO_SAMPLE_WIDTH = 2  # 16-bit
     AUDIO_SAMPLE_RATE = 48000
 
+    # --- Tryb automatyczny (bot stale wisi na kanale i sam nagrywa) ---------
+    # Kanał głosowy, na którym siedzi bot w trybie auto (ID kanału Discord).
+    _vc = os.environ.get("VOICE_CHANNEL_ID", "").strip()
+    VOICE_CHANNEL_ID = int(_vc) if _vc.isdigit() else None
+    # Kanał tekstowy do publikowania wyników trybu auto (opcjonalny; ID).
+    _rc = os.environ.get("RESULT_CHANNEL_ID", "").strip()
+    RESULT_CHANNEL_ID = int(_rc) if _rc.isdigit() else None
+    # Czy tryb auto ma być włączony od startu.
+    AUTO_RECORD = os.environ.get("AUTO_RECORD", "false").lower() in ("1", "true", "yes", "on")
+    # Po ilu minutach ciszy na kanale finalizować nagranie.
+    SILENCE_TIMEOUT_MIN = float(os.environ.get("SILENCE_TIMEOUT_MIN", "5"))
+    # Próg RMS (0-32767) - klatki poniżej traktujemy jako ciszę i odrzucamy.
+    SILENCE_RMS_THRESHOLD = int(os.environ.get("SILENCE_RMS_THRESHOLD", "300"))
+    # Co ile sekund pętla monitorująca sprawdza ciszę/obecność.
+    AUTO_CHECK_INTERVAL_SEC = float(os.environ.get("AUTO_CHECK_INTERVAL_SEC", "15"))
+
     @classmethod
     def require_token(cls) -> str:
         """Zwraca token bota albo zgłasza czytelny błąd, jeśli go brakuje."""
