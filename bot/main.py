@@ -2,9 +2,23 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import ctypes.util
+import logging
 import traceback
 
 import discord
+
+# Logowanie - potrzebne, by widzieć wewnętrzne komunikaty discord.py
+# (m.in. tryb szyfrowania głosu, błędy odbioru RTP).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
+logging.getLogger("discord.gateway").setLevel(logging.INFO)
+try:
+    logging.getLogger("discord.ext.voice_recv").setLevel(logging.DEBUG)
+except Exception:
+    pass
 
 from config import BotConfig
 from bot import Bot
