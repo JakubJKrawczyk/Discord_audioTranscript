@@ -148,7 +148,14 @@ async def transcribe_audio(
 
         # Ustal język: parametr zapytania > zmienna środowiskowa.
         lang = (language or WHISPER_LANGUAGE or "auto").lower()
-        transcribe_kwargs = {}
+        transcribe_kwargs = {
+            # Ograniczenie halucynacji Whispera na ciszy/szumie:
+            "temperature": 0.0,
+            "condition_on_previous_text": False,
+            "no_speech_threshold": 0.6,
+            "logprob_threshold": -1.0,
+            "compression_ratio_threshold": 2.4,
+        }
         if lang and lang != "auto":
             transcribe_kwargs["language"] = lang
 
