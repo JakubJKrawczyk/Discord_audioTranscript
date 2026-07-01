@@ -1,9 +1,9 @@
-# UWAGA: discord.py 2.6+ używa voice gateway v8, który WYMAGA DAVE (E2EE).
-# discord-ext-voice-recv nie potrafi dekodować DAVE przy odbiorze, więc trzymamy
-# się discord.py 2.5.x (voice gateway v4, bez DAVE) + voice-recv z linii 0.4.x.
-discord.py==2.5.2
-# voice-recv publikuje tylko alfy; <0.5 = linia zgodna z discord.py 2.5.
-discord-ext-voice-recv>=0.4.1a0,<0.5
+# Discord wyłączył stare voice gateway (<v4) - trzeba v8, czyli discord.py 2.6+.
+# UWAGA: na v8 Discord wymusza DAVE (E2EE), którego voice-recv nie potrafi
+# odszyfrować przy ODBIORZE -> obecnie odbiór głosu bota jest zablokowany po
+# stronie platformy. Trzymamy 2.7.x, żeby bot się łączył i działał poza tym.
+discord.py>=2.6,<2.8
+discord-ext-voice-recv>=0.5.0a0
 PyNaCl>=1.5.0
 requests>=2.31.0
 python-dotenv>=1.0.0
