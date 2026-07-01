@@ -16,6 +16,11 @@ class BotConfig:
     # Hasło do komendy /config (zmiana ustawień w locie). Puste = /config wyłączone.
     CONFIG_PASSWORD = os.environ.get("CONFIG_PASSWORD", "")
 
+    # ID serwera (gildii) do NATYCHMIASTOWEJ synchronizacji slash komend.
+    # Puste = sync globalny (propagacja do ~1h). Ustaw, by komendy pojawiały się od razu.
+    _gid = os.environ.get("GUILD_ID", "").strip()
+    GUILD_ID = int(_gid) if _gid.isdigit() else None
+
     # UWAGA: token NIE jest już trzymany w kodzie. Pochodzi wyłącznie ze
     # zmiennej środowiskowej DISCORD_TOKEN (np. z pliku .env). Stary token
     # wpisany na sztywno został skompromitowany i należy go unieważnić.
