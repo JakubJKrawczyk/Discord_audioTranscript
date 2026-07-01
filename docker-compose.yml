@@ -24,8 +24,9 @@ services:
     networks:
       - transcription-network
     # Wystaw port na loopbacku hosta, żeby bot (w sieci hosta) mógł go osiągnąć.
+    # Host:18000 -> kontener:8000 (8000 na hoście bywa zajęte).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:18000:8000"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
       interval: 15s
@@ -55,7 +56,7 @@ services:
       - .env
     environment:
       # whisper-api jest wystawiony na loopbacku hosta (bot używa sieci hosta).
-      - API_URL=http://127.0.0.1:8000
+      - API_URL=http://127.0.0.1:18000
     volumes:
       # Audio (czyszczone po N dniach) i trwały magazyn transkrypcji/podsumowań.
       - ./recordings:/app/recordings
