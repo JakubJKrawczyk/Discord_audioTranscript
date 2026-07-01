@@ -11,7 +11,6 @@ PAGE_SIZE = 5
 
 
 async def send_chunks(send, text, header=None):
-    """Wysyła długi tekst w kawałkach po 1900 znaków (limit Discorda)."""
     if header:
         await send(header)
     text = text or "(pusto)"
@@ -26,28 +25,26 @@ def _fmt_date(iso):
         return iso or "?"
 
 
-def build_pages(sessions):
-    """Buduje listę embedów (po PAGE_SIZE sesji), od najnowszej do najstarszej."""
+def build_pages(store, sessions):
+    """Buduje listę embedów (po PAGE_SIZE nagrań), od najnowszego."""
     pages = []
     total = len(sessions)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     for start in range(0, total, PAGE_SIZE):
         chunk = sessions[start:start + PAGE_SIZE]
-        embed = discord.Embed(
-            title="📜 Transkrypcje (od najnowszej)",
-            color=discord.Color.blue(),
-        )
+        embed = discord.Embed(title="🎧 Nagrania (od najnowszego)", color=discord.Color.blue())
         for i, s in enumerate(chunk, start=start + 1):
             names = ", ".join(p["display_name"] for p in s.get("participants", [])) or "-"
-            has_audio = any(t.get("audio_file") for t in s.get("transcripts", {}).values())
+            audio = "tak" if store.has_audio(s) else "nie"
+            transcript = "jest" if store.has_transcript(s) else "brak"
             summaries = len(s.get("summaries", []))
             title = s.get("name") or "(bez nazwy)"
             embed.add_field(
-                name=f"#{i} · {title}  ·  {s['id']}",
+                name=f"#{i} · {title}",
                 value=(
-                    f"🕑 {_fmt_date(s.get('created_at'))}\n"
-                    f"👥 {names}\n"
-                    f"🎧 audio: {'tak' if has_audio else 'nie'} · 📝 podsumowania: {summaries}"
+                    f"🆔 `{s['id']}`\n"
+                    f"🕑 {_fmt_date(s.get('created_at'))} · 👥 {names}\n"
+                    f"🎧 audio: {audio} · 📝 transkrypcja: {transcript} · 🧠 podsumowania: {summaries}"
                 ),
                 inline=False,
             )
@@ -57,8 +54,6 @@ def build_pages(sessions):
 
 
 class Paginator(discord.ui.View):
-    """Prosty paginator z przyciskami ◀ ▶ (tylko dla autora komendy)."""
-
     def __init__(self, pages, author_id, start_index=0, timeout=180):
         super().__init__(timeout=timeout)
         self.pages = pages
@@ -67,7 +62,6 @@ class Paginator(discord.ui.View):
         self._sync()
 
     def _sync(self):
-        # children[0] = prev, children[1] = next (kolejność deklaracji)
         self.children[0].disabled = self.index <= 0
         self.children[1].disabled = self.index >= len(self.pages) - 1
 
@@ -95,100 +89,122 @@ class TranscriptionCommands:
         self.cog = audio_recorder
         self.bot = audio_recorder.bot
         self.store = audio_recorder.store
-
         self.register_commands()
         self.register_slash_commands()
 
     # --------------------------------------------------------------- rejestracja
     def register_commands(self):
-        @self.bot.command(name="transcriptions")
-        async def transcriptions(ctx, page: int = 1):
-            """Lista transkrypcji z paginacją"""
-            await self._list(ctx, ctx.author.id, page)
+        @self.bot.command(name="recordings")
+        async def recordings(ctx, page: int = 1):
+            """Lista nagrań (audio + transkrypcja + podsumowania)"""
+            await self._list(ctx.send, ctx.author.id, page)
 
         @self.bot.command(name="summarize")
         async def summarize(ctx, target: str = "all"):
-            """Podsumuj transkrypcję: <ID> | all | <start>-<end>"""
-            await self._summarize(ctx, ctx.send, ctx.author.id, target)
+            """Generuje podsumowanie: <ID> | all | indeks | przedział"""
+            await self._summarize(ctx.send, ctx.author.id, target)
+
+        @self.bot.command(name="rename")
+        async def rename(ctx, target: str, *, name: str):
+            """Zmienia nazwę nagrania: <ID|indeks> <nowa nazwa>"""
+            await self._rename(ctx.send, target, name)
 
         @self.bot.command(name="delete")
-        async def delete(ctx, target: str):
-            """Usuń transkrypcję: <ID> | <start>-<end> | <indeks>"""
-            await self._delete(ctx, ctx.send, target)
+        async def delete(ctx, target: str, scope: str = "all"):
+            """Usuwa nagranie/element: <cel> [all|audio|summary]"""
+            await self._delete(ctx.send, target, scope)
 
     def register_slash_commands(self):
-        @self.bot.tree.command(name="transcriptions", description="Lista transkrypcji (od najnowszej) z paginacją")
+        @self.bot.tree.command(name="recordings", description="Lista nagrań (audio + transkrypcja + podsumowania)")
         @app_commands.describe(page="Numer strony (opcjonalnie)")
-        async def transcriptions_slash(interaction: discord.Interaction, page: Optional[int] = 1):
+        async def recordings_slash(interaction: discord.Interaction, page: Optional[int] = 1):
             await interaction.response.defer(ephemeral=False)
-            await self._list_slash(interaction, page or 1)
+            await self._list(interaction.followup.send, interaction.user.id, page or 1)
 
-        @self.bot.tree.command(name="summarize", description="Podsumuj transkrypcję: ID, all lub przedział indeksów")
-        @app_commands.describe(target="ID transkrypcji, 'all', albo przedział np. 1-3")
+        @self.bot.tree.command(name="summarize", description="Generuje podsumowanie: ID, all, indeks lub przedział")
+        @app_commands.describe(target="ID nagrania, 'all', indeks (np. 2) lub przedział (np. 1-3)")
         async def summarize_slash(interaction: discord.Interaction, target: str = "all"):
             await interaction.response.defer(ephemeral=False)
-            await self._summarize(interaction, interaction.followup.send, interaction.user.id, target)
+            await self._summarize(interaction.followup.send, interaction.user.id, target)
 
-        @self.bot.tree.command(name="delete", description="Usuń transkrypcję: ID, indeks lub przedział indeksów")
-        @app_commands.describe(target="ID transkrypcji, indeks np. 2, albo przedział np. 1-3")
-        async def delete_slash(interaction: discord.Interaction, target: str):
+        @self.bot.tree.command(name="rename", description="Zmienia nazwę nagrania")
+        @app_commands.describe(target="ID nagrania lub indeks", name="Nowa nazwa")
+        async def rename_slash(interaction: discord.Interaction, target: str, name: str):
             await interaction.response.defer(ephemeral=False)
-            await self._delete(interaction, interaction.followup.send, target)
+            await self._rename(interaction.followup.send, target, name)
+
+        @self.bot.tree.command(name="delete", description="Usuwa nagranie lub jego element")
+        @app_commands.describe(
+            target="ID nagrania, indeks (np. 2) lub przedział (np. 1-3)",
+            scope="Co usunąć: all (całość), audio, summary",
+        )
+        @app_commands.choices(scope=[
+            app_commands.Choice(name="all (całe nagranie)", value="all"),
+            app_commands.Choice(name="audio", value="audio"),
+            app_commands.Choice(name="summary (podsumowania)", value="summary"),
+        ])
+        async def delete_slash(interaction: discord.Interaction, target: str,
+                               scope: Optional[app_commands.Choice[str]] = None):
+            await interaction.response.defer(ephemeral=False)
+            await self._delete(interaction.followup.send, target, scope.value if scope else "all")
 
     # -------------------------------------------------------------------- logika
-    async def _list(self, ctx, author_id, page):
+    async def _list(self, send, author_id, page):
         sessions = await asyncio.to_thread(self.store.list_sessions)
         if not sessions:
-            await ctx.send("Brak zapisanych transkrypcji.")
+            await send("Brak zapisanych nagrań.")
             return
-        pages = build_pages(sessions)
+        pages = build_pages(self.store, sessions)
         start = max(0, min(page - 1, len(pages) - 1))
-        view = Paginator(pages, author_id, start_index=start)
-        await ctx.send(embed=pages[start], view=view)
+        await send(embed=pages[start], view=Paginator(pages, author_id, start_index=start))
 
-    async def _list_slash(self, interaction, page):
-        sessions = await asyncio.to_thread(self.store.list_sessions)
-        if not sessions:
-            await interaction.followup.send("Brak zapisanych transkrypcji.")
-            return
-        pages = build_pages(sessions)
-        start = max(0, min(page - 1, len(pages) - 1))
-        view = Paginator(pages, interaction.user.id, start_index=start)
-        await interaction.followup.send(embed=pages[start], view=view)
-
-    async def _summarize(self, ctx_or_inter, send, requester_id, target):
+    async def _summarize(self, send, requester_id, target):
         targets = await asyncio.to_thread(self.store.resolve_targets, target)
         if not targets:
-            await send(
-                f"Nie znaleziono transkrypcji dla: `{target}`. "
-                f"Podaj ID, `all`, indeks lub przedział (np. `1-3`)."
-            )
+            await send(f"Nie znaleziono nagrania dla: `{target}` (podaj ID, `all`, indeks lub przedział).")
             return
-
-        await send(f"Generuję podsumowanie dla {len(targets)} transkrypcji...")
+        await send(f"Generuję podsumowanie dla {len(targets)} nagrań...")
         for s in targets:
             summary = await self.cog.summarize_session(s, requester_id=requester_id, label="manual")
             if summary:
                 names = ", ".join(p["display_name"] for p in s.get("participants", [])) or "-"
                 await send_chunks(send, summary, header=f"**Podsumowanie {s['id']}** ({names}):")
             else:
-                await send(f"Transkrypcja `{s['id']}` jest pusta - pomijam.")
+                await send(f"Nagranie `{s['id']}` nie ma transkrypcji - pomijam.")
 
-    async def _delete(self, ctx_or_inter, send, target):
+    async def _rename(self, send, target, name):
         targets = await asyncio.to_thread(self.store.resolve_targets, target)
         if not targets:
-            await send(
-                f"Nie znaleziono transkrypcji dla: `{target}`. "
-                f"Podaj ID, indeks lub przedział (np. `1-3`)."
-            )
+            await send(f"Nie znaleziono nagrania dla: `{target}`.")
+            return
+        s = targets[0]
+        await asyncio.to_thread(self.store.set_name, s["id"], name)
+        extra = f" (dopasowano {len(targets)}, zmieniono pierwsze)" if len(targets) > 1 else ""
+        await send(f"✏️ Zmieniono nazwę `{s['id']}` na: **{name}**{extra}")
+
+    async def _delete(self, send, target, scope):
+        scope = (scope or "all").lower()
+        valid = {"all", "audio", "summary", "podsumowanie", "podsumowania", "całość", "nagranie"}
+        if scope not in valid:
+            await send(f"Nieznany zakres: `{scope}`. Użyj: `all` | `audio` | `summary`.")
+            return
+        targets = await asyncio.to_thread(self.store.resolve_targets, target)
+        if not targets:
+            await send(f"Nie znaleziono nagrania dla: `{target}`.")
             return
 
-        deleted = []
+        done = []
         for s in targets:
-            ok = await asyncio.to_thread(self.store.delete_session, s["id"])
+            sid = s["id"]
+            if scope == "audio":
+                ok = await asyncio.to_thread(self.store.delete_audio, sid)
+                label = "audio"
+            elif scope in ("summary", "podsumowanie", "podsumowania"):
+                ok = await asyncio.to_thread(self.store.delete_summaries, sid)
+                label = "podsumowania"
+            else:
+                ok = await asyncio.to_thread(self.store.delete_session, sid)
+                label = "całe nagranie"
             if ok:
-                deleted.append(s["id"])
-        await send(
-            f"Usunięto {len(deleted)} transkrypcji"
-            + (f": {', '.join(deleted)}" if deleted else ".")
-        )
+                done.append(sid)
+        await send(f"🗑️ Usunięto ({label}) dla {len(done)}: {', '.join(done) if done else '-'}")

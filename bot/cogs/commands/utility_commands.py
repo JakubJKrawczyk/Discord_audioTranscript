@@ -19,10 +19,11 @@ HELP_SECTIONS = [
         ("/record_all", "Przechodzi na Twój kanał i nagrywa wszystkich."),
         ("/stop", "Kończy nagrywanie, przetwarza i wraca na kanał domowy."),
     ]),
-    ("📜 Transkrypcje", [
-        ("/transcriptions [strona]", "Lista transkrypcji od najnowszej (paginacja ◀ ▶)."),
-        ("/summarize <cel>", "Podsumowanie. cel: ID • all • indeks `2` • przedział `1-3`."),
-        ("/delete <cel>", "Usuwa transkrypcję. cel: ID • indeks `2` • przedział `1-3`."),
+    ("🎧 Nagrania", [
+        ("/recordings [strona]", "Lista nagrań: nazwa, audio, transkrypcja, podsumowania (◀ ▶)."),
+        ("/summarize <cel>", "Generuje podsumowanie. cel: ID • all • indeks `2` • przedział `1-3`."),
+        ("/rename <cel> <nazwa>", "Zmienia nazwę nagrania."),
+        ("/delete <cel> [zakres]", "Usuwa. zakres: `all` (całość) • `audio` • `summary`."),
     ]),
     ("🤖 Ollama", [
         ("/change_model <model>", "Zmienia model używany do podsumowań."),

@@ -203,6 +203,41 @@ class TranscriptionStore:
             self._write_index(sessions)
             return True
 
+    def delete_audio(self, session_id: str) -> bool:
+        """Usuwa TYLKO pliki audio nagrania (transkrypcja i podsumowania zostają)."""
+        with self._lock:
+            sessions = self._read_index()
+            target = next((s for s in sessions if s["id"].lower() == session_id.lower()), None)
+            if target is None:
+                return False
+            for t in target.get("transcripts", {}).values():
+                self._rm(t.get("audio_file"))
+                t["audio_file"] = None
+                t["audio_expired"] = True
+            self._write_index(sessions)
+            return True
+
+    def delete_summaries(self, session_id: str) -> bool:
+        """Usuwa TYLKO podsumowania nagrania (audio i transkrypcja zostają)."""
+        with self._lock:
+            sessions = self._read_index()
+            target = next((s for s in sessions if s["id"].lower() == session_id.lower()), None)
+            if target is None:
+                return False
+            for sm in target.get("summaries", []):
+                self._rm(self._abs(sm.get("file")))
+            target["summaries"] = []
+            self._write_index(sessions)
+            return True
+
+    @staticmethod
+    def has_transcript(session) -> bool:
+        return any((t.get("length") or 0) > 0 for t in session.get("transcripts", {}).values())
+
+    @staticmethod
+    def has_audio(session) -> bool:
+        return any(t.get("audio_file") for t in session.get("transcripts", {}).values())
+
     def prune_audio(self):
         """Usuwa pliki audio starsze niż retention; transkrypcje zostają."""
         cutoff = time.time() - self.audio_retention_days * 86400
