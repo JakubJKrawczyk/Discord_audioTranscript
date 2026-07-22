@@ -40,6 +40,12 @@ class AudioRecorder(commands.Cog):
         self._session_ts = None       # znacznik do nazw plików
         self._session_started_dt = None
 
+        # „Żywa" transkrypcja - jedna wiadomość na czacie kanału, edytowana
+        # w miejscu w miarę transkrybowania kolejnych wypowiedzi.
+        self._live_msg = None        # aktualnie edytowana wiadomość
+        self._live_buf = ""          # jej bieżąca treść
+        self._live_first = True      # czy to pierwsza wiadomość sesji (nagłówek)
+
         ApiController.set_base_url(BotConfig.API_URL)
 
         self.user_contexts = {}
@@ -182,6 +188,9 @@ class AudioRecorder(commands.Cog):
         self._session_ts = None
         self._session_started_dt = None
         self._auto_announced = False
+        self._live_msg = None
+        self._live_buf = ""
+        self._live_first = True
 
     async def start_auto(self, channel):
         await self._connect(channel, gated=True)
@@ -274,6 +283,54 @@ class AudioRecorder(commands.Cog):
                 return ch.send
         return None
 
+    def _live_channel(self):
+        """Kanał, na którego czacie pisze się „żywą" transkrypcję."""
+        if self.current_channel is not None:
+            return self.current_channel
+        if self.result_channel_id:
+            return self.bot.get_channel(self.result_channel_id)
+        return None
+
+    # Limit treści wiadomości Discord to 2000 znaków - zostawiamy zapas.
+    _LIVE_MAX = 1900
+
+    async def _update_live_transcript(self, new_lines):
+        """
+        Dopisuje świeżo striptowane wypowiedzi do jednej „żywej" wiadomości na
+        czacie kanału (edycja w miejscu). Po przekroczeniu limitu Discorda
+        otwiera kolejną wiadomość i kontynuuje w niej.
+        """
+        if not new_lines:
+            return
+        channel = self._live_channel()
+        if channel is None:
+            return
+        for dt, disp, txt in sorted(new_lines, key=lambda x: x[0]):
+            line = f"`[{dt:%H:%M:%S}]` **{disp}:** {txt}"
+            if len(line) > self._LIVE_MAX:
+                line = line[:self._LIVE_MAX]
+            need_new = (
+                self._live_msg is None
+                or len(self._live_buf) + 1 + len(line) > self._LIVE_MAX
+            )
+            if need_new:
+                content = line
+                if self._live_first:
+                    content = "📝 **Transkrypcja na żywo:**\n" + line
+                    self._live_first = False
+                try:
+                    self._live_msg = await channel.send(content)
+                    self._live_buf = content
+                except Exception as e:  # noqa: BLE001
+                    print(f"[live] Nie udało się wysłać wiadomości: {e}")
+                    self._live_msg = None
+            else:
+                self._live_buf += "\n" + line
+                try:
+                    await self._live_msg.edit(content=self._live_buf)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[live] Nie udało się edytować wiadomości: {e}")
+
     @staticmethod
     async def _send_chunks(send, text, header=None):
         if header:
@@ -306,6 +363,7 @@ class AudioRecorder(commands.Cog):
         Przetwarza ZAKOŃCZONE wypowiedzi: dopisuje audio na dysk (surowe PCM),
         transkrybuje i zapamiętuje linię z czasem. Zakłada trzymany _proc_lock.
         """
+        new_lines = []
         for it in items:
             uid = it["uid"]
             if self.manual_only_users and uid not in self.manual_only_users:
@@ -332,7 +390,12 @@ class AudioRecorder(commands.Cog):
             await asyncio.to_thread(self._append_raw, raw, pcm)  # audio -> dysk (zwalnia RAM)
             text = await self._transcribe_pcm(pcm)
             if text and text.strip() and not text.startswith("Błąd"):
-                self._flush_lines.append((start, display, text.strip()))
+                entry = (start, display, text.strip())
+                self._flush_lines.append(entry)
+                new_lines.append(entry)
+
+        # Świeżo przetranskrybowane wypowiedzi -> żywa wiadomość na czacie.
+        await self._update_live_transcript(new_lines)
 
     async def _flush_pending(self):
         """Przetwarza zakończone wypowiedzi (wołane cyklicznie przez flush_loop)."""
@@ -362,6 +425,9 @@ class AudioRecorder(commands.Cog):
             self._session_ts = None
             self._session_started_dt = None
             self._auto_announced = False
+            self._live_msg = None
+            self._live_buf = ""
+            self._live_first = True
 
             if not lines and not audio_raw:
                 return None
