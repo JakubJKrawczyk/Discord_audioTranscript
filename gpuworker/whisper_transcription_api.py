@@ -1,6 +1,8 @@
 import os
+import re
 import tempfile
 import logging
+import unicodedata
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any
 
@@ -113,6 +115,71 @@ class SummarizeResponse(BaseModel):
     model_used: str
 
 
+# ---------------------------------------------------------------------------
+# Wykrywanie halucynacji Whispera
+#
+# Na ciszy/szumie Whisper nie "słyszy" mowy, więc dokleja frazy widziane w
+# danych treningowych (napisy z YouTube): "Dziękuję za uwagę", "Napisy
+# stworzone przez społeczność Amara.org" itp. Odrzucamy takie wyniki na
+# podstawie sygnałów pewności modelu ORAZ czarnej listy typowych fraz.
+# ---------------------------------------------------------------------------
+
+# Frazy znormalizowane: małe litery, bez polskich ogonków, bez interpunkcji.
+_HALLUCINATION_PHRASES = {
+    "dziekuje",
+    "dziekuje za uwage",
+    "dziekuje za obejrzenie",
+    "dziekuje za ogladanie",
+    "dziekujemy za ogladanie",
+    "dziekuje bardzo",
+    "dziekuje panstwu za uwage",
+    "napisy stworzone przez spolecznosc amara org",
+    "napisy amara org",
+    "napisy stworzone przez spolecznosc",
+    "prosze o subskrypcje",
+    "zapraszam do subskrypcji",
+    "zapraszam na kolejny odcinek",
+    "do zobaczenia",
+    "do zobaczenia w nastepnym odcinku",
+    "do zobaczenia w kolejnym filmie",
+    "kliknij subskrybuj",
+}
+
+
+def _normalize(text: str) -> str:
+    """Małe litery, bez znaków diakrytycznych i interpunkcji, pojedyncze spacje."""
+    # "ł" nie rozkłada się w NFKD (osobna litera), więc mapujemy ją ręcznie.
+    t = text.lower().replace("ł", "l")
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r"[^a-z0-9 ]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _looks_like_hallucination(result: Dict[str, Any]) -> bool:
+    text = (result.get("text") or "").strip()
+    if not text:
+        return True
+
+    segments = result.get("segments") or []
+    # 1) Sygnał modelu: wysokie prawdopodobieństwo ciszy + niska pewność tokenów.
+    if segments:
+        max_ns = max(s.get("no_speech_prob", 0.0) for s in segments)
+        avg_lp = sum(s.get("avg_logprob", 0.0) for s in segments) / len(segments)
+        if max_ns >= 0.6 and avg_lp <= -0.5:
+            return True
+
+    # 2) Czarna lista: cały (krótki) tekst to znana fraza-halucynacja.
+    norm = _normalize(text)
+    if norm in _HALLUCINATION_PHRASES:
+        return True
+    if len(norm.split()) <= 6 and any(
+        norm == p or norm.startswith(p + " ") for p in _HALLUCINATION_PHRASES
+    ):
+        return True
+    return False
+
+
 @app.post("/transcribe/", response_model=TranscriptionResponse)
 async def transcribe_audio(
         file: UploadFile = File(...),
@@ -167,8 +234,15 @@ async def transcribe_audio(
         )
         result = whisper_model.transcribe(temp_path, **transcribe_kwargs)
 
+        text = result.get("text", "").strip()
+        # Odrzuć prawdopodobne halucynacje na ciszy/szumie -> pusty tekst.
+        # Bot zamienia pusty wynik na znacznik "----------------" w podglądzie.
+        if _looks_like_hallucination(result):
+            logger.info(f"Odrzucono prawdopodobną halucynację: {text!r}")
+            text = ""
+
         return TranscriptionResponse(
-            text=result.get("text", "").strip(),
+            text=text,
             language=result.get("language"),
             duration=result.get("duration"),
             model_used=f"whisper-{WHISPER_MODEL_SIZE}",

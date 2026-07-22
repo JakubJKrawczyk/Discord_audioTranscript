@@ -45,6 +45,7 @@ class AudioRecorder(commands.Cog):
         self._live_msg = None        # aktualnie edytowana wiadomość
         self._live_buf = ""          # jej bieżąca treść
         self._live_first = True      # czy to pierwsza wiadomość sesji (nagłówek)
+        self._live_last_placeholder = False  # ostatnia linia to znacznik "----"?
 
         ApiController.set_base_url(BotConfig.API_URL)
 
@@ -191,6 +192,7 @@ class AudioRecorder(commands.Cog):
         self._live_msg = None
         self._live_buf = ""
         self._live_first = True
+        self._live_last_placeholder = False
 
     async def start_auto(self, channel):
         await self._connect(channel, gated=True)
@@ -305,7 +307,11 @@ class AudioRecorder(commands.Cog):
         channel = self._live_channel()
         if channel is None:
             return
-        for dt, disp, txt in sorted(new_lines, key=lambda x: x[0]):
+        for dt, disp, txt, is_placeholder in sorted(new_lines, key=lambda x: x[0]):
+            # Nie powtarzaj znaczników "----" jeden pod drugim (bez zaśmiecania).
+            if is_placeholder and self._live_last_placeholder:
+                continue
+            self._live_last_placeholder = is_placeholder
             line = f"`[{dt:%H:%M:%S}]` **{disp}:** {txt}"
             if len(line) > self._LIVE_MAX:
                 line = line[:self._LIVE_MAX]
@@ -389,12 +395,17 @@ class AudioRecorder(commands.Cog):
 
             await asyncio.to_thread(self._append_raw, raw, pcm)  # audio -> dysk (zwalnia RAM)
             text = await self._transcribe_pcm(pcm)
-            if text and text.strip() and not text.startswith("Błąd"):
-                entry = (start, display, text.strip())
-                self._flush_lines.append(entry)
-                new_lines.append(entry)
+            stripped = (text or "").strip()
+            if stripped and not stripped.startswith("Błąd"):
+                entry = (start, display, stripped)
+                self._flush_lines.append(entry)         # trwały transkrypt (realna mowa)
+                new_lines.append((start, display, stripped, False))
+            else:
+                # Whisper nie rozpoznał mowy (cisza/szum/halucynacja) - znacznik
+                # tylko w podglądzie, NIE trafia do transkryptu ani do Ollamy.
+                new_lines.append((start, display, "----------------", True))
 
-        # Świeżo przetranskrybowane wypowiedzi -> żywa wiadomość na czacie.
+        # Świeżo przetworzone wypowiedzi -> żywa wiadomość na czacie.
         await self._update_live_transcript(new_lines)
 
     async def _flush_pending(self):
@@ -428,6 +439,7 @@ class AudioRecorder(commands.Cog):
             self._live_msg = None
             self._live_buf = ""
             self._live_first = True
+            self._live_last_placeholder = False
 
             if not lines and not audio_raw:
                 return None
