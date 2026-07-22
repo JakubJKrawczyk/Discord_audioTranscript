@@ -32,6 +32,10 @@ class AudioRecorder(commands.Cog):
         self._proc_lock = asyncio.Lock()   # serializuje flush i finalize
         self._auto_started = False
         self._auto_announced = False  # czy ogłoszono start bieżącej sesji auto
+        # Pauza: gdy transkrypt poszedł do podsumowania (Ollama, nawet minuty),
+        # wstrzymujemy nagrywanie - nie zbieramy nowej rozmowy i nie startujemy
+        # nowej sesji, dopóki podsumowanie się nie skończy. Potem auto wznawia.
+        self._paused = False
 
         # Przyrostowe przetwarzanie sesji (aby nie trzymać całości w pamięci):
         self._flush_lines = []       # [(start_dt, display, text)]
@@ -110,7 +114,7 @@ class AudioRecorder(commands.Cog):
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         # W trybie auto: gdy kanał opustoszeje, finalizuj szybciej niż pętla.
-        if self.mode != "auto" or self.current_channel is None:
+        if self._paused or self.mode != "auto" or self.current_channel is None:
             return
         members = [m for m in self.current_channel.members if not m.bot]
         if not members and self.sink and self.sink.has_audio():
@@ -128,7 +132,8 @@ class AudioRecorder(commands.Cog):
     @tasks.loop(seconds=BotConfig.AUTO_CHECK_INTERVAL_SEC)
     async def monitor_loop(self):
         # Finalizacja w trybie auto: cisza dłuższa niż timeout lub pusty kanał.
-        if self.mode != "auto" or self.sink is None or self.current_channel is None:
+        # W trakcie podsumowania (pauza) nic nie robimy - czekamy na wznowienie.
+        if self._paused or self.mode != "auto" or self.sink is None or self.current_channel is None:
             return
         try:
             members = [m for m in self.current_channel.members if not m.bot]
@@ -148,7 +153,8 @@ class AudioRecorder(commands.Cog):
     @tasks.loop(seconds=4)
     async def flush_loop(self):
         # Przyrostowe przetwarzanie zakończonych wypowiedzi (zwalnia pamięć).
-        if self.mode == "idle" or self.sink is None:
+        # W trakcie podsumowania (pauza) nie przetwarzamy - nagrywanie stoi.
+        if self._paused or self.mode == "idle" or self.sink is None:
             return
         try:
             await self._flush_pending()
@@ -253,6 +259,39 @@ class AudioRecorder(commands.Cog):
         self.current_channel = None
         self.mode = "idle"
         self.manual_only_users = None
+        self._paused = False
+
+    def _pause_capture(self):
+        """Wstrzymuje odbiór głosu (na czas podsumowania). Nowe audio jest
+        odrzucane - świadomie nie nagrywamy, dopóki Ollama nie skończy."""
+        self._paused = True
+        vc = self.voice_client
+        try:
+            if vc is not None and vc.is_listening():
+                vc.stop_listening()
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _resume_capture(self):
+        """Wznawia nagrywanie po podsumowaniu (tylko w trybie auto)."""
+        self._paused = False
+        if self.mode != "auto":
+            return
+        vc = self.voice_client
+        if vc is None or not vc.is_connected():
+            return
+        try:
+            # Świeży sink pod następną sesję (czysty stan).
+            sink = PerUserPCMSink(
+                rms_threshold=self.silence_rms_threshold,
+                utterance_gap=BotConfig.UTTERANCE_GAP_SEC,
+            )
+            if vc.is_listening():
+                vc.stop_listening()
+            vc.listen(sink)
+            self.sink = sink
+        except Exception as e:  # noqa: BLE001
+            print(f"Nie udało się wznowić nagrywania: {e}")
 
     # =======================================================================
     #  Finalizacja nagrania -> transkrypcja + podsumowanie + nazwa
@@ -485,11 +524,18 @@ class AudioRecorder(commands.Cog):
             summary = None
             name = ""
             if transcript_text.strip():
-                summary = await self.summarize_with_ollama(transcript_text)
-                await asyncio.to_thread(self.store.add_summary, session["id"], "auto", summary)
-                name = await self.generate_title(summary or transcript_text)
-                if name:
-                    await asyncio.to_thread(self.store.set_name, session["id"], name)
+                # Transkrypt idzie do podsumowania (Ollama) - wstrzymaj nagrywanie
+                # na ten czas, żeby nie zbierać nowej rozmowy w tle. Wznawiamy
+                # dopiero po zakończeniu (nawet jeśli podsumowanie się wywali).
+                self._pause_capture()
+                try:
+                    summary = await self.summarize_with_ollama(transcript_text)
+                    await asyncio.to_thread(self.store.add_summary, session["id"], "auto", summary)
+                    name = await self.generate_title(summary or transcript_text)
+                    if name:
+                        await asyncio.to_thread(self.store.set_name, session["id"], name)
+                finally:
+                    await self._resume_capture()
 
             if out:
                 parts = ", ".join(a["display_name"] for a in audio_files.values()) or "-"

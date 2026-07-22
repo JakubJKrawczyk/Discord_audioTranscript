@@ -40,6 +40,24 @@ PORT = int(os.environ.get("PORT", 8000))
 # Lista dozwolonych originów dla CORS (oddzielona przecinkami). Domyślnie "*".
 ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
+# Okno kontekstu Ollamy (num_ctx) dla podsumowań. Domyślne okno Ollamy jest
+# małe (~2-4k tokenów) i PO CICHU obcina dłuższe transkrypty - podsumowanie
+# pomija wtedy część rozmowy. Dobieramy num_ctx do długości wejścia:
+#   - OLLAMA_NUM_CTX     - dolna granica (minimalne okno)
+#   - OLLAMA_NUM_CTX_MAX - górna granica (chroni VRAM; model musi ją wspierać)
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+OLLAMA_NUM_CTX_MAX = int(os.environ.get("OLLAMA_NUM_CTX_MAX", "32768"))
+# Zapas kontekstu (tokeny) zarezerwowany na wygenerowaną odpowiedź.
+_CTX_OUTPUT_RESERVE = 2048
+
+
+def _estimate_num_ctx(system_prompt: str, user_prompt: str) -> int:
+    """Dobiera num_ctx tak, by zmieścił cały prompt + odpowiedź (z granicami)."""
+    # Zgrubnie ~3 znaki/token dla polskiego tekstu (bezpieczny, lekko zawyżony).
+    approx_tokens = (len(system_prompt) + len(user_prompt)) // 3
+    needed = approx_tokens + _CTX_OUTPUT_RESERVE
+    return max(OLLAMA_NUM_CTX, min(needed, OLLAMA_NUM_CTX_MAX))
+
 
 async def ollama_is_available() -> Dict[str, Any]:
     """Sprawdza dostępność Ollamy. Ollama nie ma /api/health - używamy /api/tags."""
@@ -289,13 +307,24 @@ async def summarize_text(request: SummarizeRequest = Body(...)):
             f"podsumowanie:\n\n{request.text}\n\nPodsumowanie:"
         )
 
+    # Dobierz okno kontekstu do długości promptu, by Ollama nie obcięła wejścia.
+    num_ctx = _estimate_num_ctx(system_prompt, user_prompt)
+    logger.info(
+        f"Ollama /generate: model={request.model_name}, "
+        f"prompt≈{len(system_prompt) + len(user_prompt)} znaków, num_ctx={num_ctx}"
+    )
+    options: Dict[str, Any] = {
+        "temperature": request.temperature or 0.0,
+        "num_ctx": num_ctx,
+    }
     payload: Dict[str, Any] = {
         "model": request.model_name,
         "system": system_prompt,
         "prompt": user_prompt,
         "stream": False,
-        "options": {"temperature": request.temperature or 0.0},
+        "options": options,
     }
+    # additional_params na końcu - może nadpisać num_ctx/temperature świadomie.
     if request.additional_params:
         payload["options"].update(request.additional_params)
 
